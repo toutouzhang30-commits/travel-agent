@@ -1,0 +1,138 @@
+### Phase 2：页面入口 - 根路径应返回聊天页 HTML
+GET http://localhost:8044/
+Accept: text/html
+
+### Phase 2：页面入口 - /chat 应返回聊天页 HTML
+GET http://localhost:8044/chat
+Accept: text/html
+
+### Phase 2：静态资源 - 前端脚本应可访问
+GET http://localhost:8044/js/chat.js
+Accept: application/javascript
+
+### Fallback：同步接口 - 一轮直接生成 itinerary
+POST http://localhost:8044/api/chat
+Content-Type: application/json
+Accept: application/json
+
+{
+  "message": "杭州3天，预算3000，轻松一点，想吃美食和看自然风景"
+}
+
+### Fallback：同步接口 - 首轮只给目的地，响应中应包含 followUpQuestion 和 missingFields
+POST http://localhost:8044/api/chat
+Content-Type: application/json
+Accept: application/json
+
+{
+  "message": "我想去杭州"
+}
+
+### Phase 2：流式接口 - 首轮触发追问，观察 answer 事件中是否直接包含具体追问文案，并记录返回的 sessionId
+POST http://localhost:8044/api/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "message": "北京5天，预算3000"
+}
+
+### Phase 2：流式接口 - 预算追问后只回复数字，应该识别为 budget，不应继续追问预算
+POST http://localhost:8044/api/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "sessionId": "请替换为上一步返回的 sessionId",
+  "message": "300"
+}
+
+### Phase 2：流式接口 - 如果仍缺偏好，再补一个偏好后应生成 itinerary
+POST http://localhost:8044/api/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "sessionId": "请替换为同一个 sessionId",
+  "message": "轻松一点，喜欢美食"
+}
+
+### Phase 2：流式接口 - 使用同一 sessionId 修改 itinerary，观察 status / itinerary / done
+POST http://localhost:8044/api/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "sessionId": "请替换为同一个 sessionId",
+  "message": "第二天太累了，轻松一点"
+}
+
+### Phase 2：流式接口 - 旅行天数追问后只回复数字，应该识别为 tripDays
+POST http://localhost:8044/api/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "message": "我想去上海，预算3000"
+}
+
+### Phase 2：流式接口 - 使用上一步返回的 sessionId，仅回复数字天数
+POST http://localhost:8044/api/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "sessionId": "请替换为上一步返回的 sessionId",
+  "message": "3"
+}
+
+### 边界：空消息应返回 400
+POST http://localhost:8044/api/chat
+Content-Type: application/json
+Accept: application/json
+
+{
+  "message": ""
+}
+
+### 边界：同步接口缺失 message 应返回 400
+POST http://localhost:8044/api/chat
+Content-Type: application/json
+Accept: application/json
+
+{
+  "sessionId": "phase1-boundary-missing-message"
+}
+
+### 边界：同步接口空请求体应返回 400
+POST http://localhost:8044/api/chat
+Content-Type: application/json
+Accept: application/json
+
+
+### 边界：流式接口空消息也应返回 error 事件或 400
+POST http://localhost:8044/api/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "message": ""
+}
+
+### 边界：流式接口缺失 message 应返回 error 事件或 400
+POST http://localhost:8044/api/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "sessionId": "phase2-boundary-missing-message"
+}
+
+### 边界：不传 sessionId，应自动创建新会话
+POST http://localhost:8044/api/chat
+Content-Type: application/json
+Accept: application/json
+
+{
+  "message": "上海周末两天，想拍照打卡"
+}

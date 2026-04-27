@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>旅游 AI 助手 - MVP</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: sans-serif; display: flex; height: 100vh; margin: 0; }
+        #left-panel { width: 60%; display: flex; flex-direction: column; border-right: 2px solid #ccc; min-height: 0; }
+        #right-panel { width: 40%; padding: 10px; display: flex; flex-direction: column; gap: 12px; background: #f9f9f9; min-height: 0; }
+        h3 { margin: 0; }
+
+        #message-list { flex: 1; overflow-y: auto; padding: 10px; border-bottom: 1px solid #eee; }
+        .message { margin-bottom: 10px; padding: 8px; border-radius: 4px; white-space: pre-wrap; }
+        .user-msg { background: #e3f2fd; align-self: flex-end; }
+        .ai-msg { background: #f5f5f5; }
+
+        #status-area { min-height: 30px; padding: 5px 10px; font-size: 0.9em; color: #666; font-style: italic; }
+
+        #input-area { padding: 15px; display: flex; gap: 10px; }
+        #user-input { flex: 1; padding: 8px; }
+
+        #itinerary-display { border: 2px dashed #bbb; padding: 15px; min-height: 200px; flex: 1; overflow-y: auto; background: #fff; }
+        #retrieval-area, #tool-area, #source-area { border: 1px solid #ddd; padding: 10px; font-size: 0.8em; color: #888; background: #fff; flex-shrink: 0; }
+    </style>
+</head>
+<body>
+
+<div id="left-panel">
+    <div id="message-list">
+        <div class="message ai-msg">您好！我是您的旅游 AI 助手。请告诉我您想去哪里？</div>
+    </div>
+
+    <div id="status-area">等待指令...</div>
+
+    <div id="input-area">
+        <input type="text" id="user-input" placeholder="输入您的旅行计划，例如：去杭州玩3天" autocomplete="off">
+        <button id="send-btn">发送</button>
+    </div>
+</div>
+
+<div id="right-panel">
+    <h3>当前行程方案</h3>
+    <div id="itinerary-display">
+        <p style="color: #999;">暂无生成的行程</p>
+    </div>
+
+    <h3>检索状态</h3>
+    <div id="retrieval-area">
+        尚未触发知识检索...
+    </div>
+
+    <h3>工具调用状态</h3>
+    <div id="tool-area">
+        尚未触发工具调用...
+    </div>
+
+    <h3>信息来源</h3>
+    <div id="source-area">
+        Phase 4 接入工具后将在此展示参考文档与工具来源...
+    </div>
+</div>
+
+<script th:src="@{/js/chat.js}"></script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+server:
+  port: 8044
+
+spring:
+  profiles:
+    default: local
+  ai:
+    model:
+      chat: openai
+      embedding: zhipuai
+    openai:
+      api-key: ${DEEPSEEK_API_KEY}
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      chat:
+        options:
+          model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
+          temperature: ${DEEPSEEK_TEMPERATURE:0.7}
+    zhipuai:
+      api-key: ${ZHIPUAI_API_KEY}
+      embedding:
+        options:
+          model: ${ZHIPUAI_EMBEDDING_MODEL:embedding-3}
+          dimensions: ${ZHIPUAI_EMBEDDING_DIMENSIONS:1024}
+    vectorstore:
+      pgvector:
+        initialize-schema: true
+        schema-validation: true
+        dimensions: ${ZHIPUAI_EMBEDDING_DIMENSIONS:1024}
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        schema-name: ${PGVECTOR_SCHEMA_NAME:public}
+        table-name: ${PGVECTOR_TABLE_NAME:travel_knowledge}
+        max-document-batch-size: ${PGVECTOR_MAX_DOCUMENT_BATCH_SIZE:1000}
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+      enabled: true
+  datasource:
+    url: ${PGVECTOR_DATASOURCE_URL}
+    username: ${PGVECTOR_DATASOURCE_USERNAME}
+    password: ${PGVECTOR_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+travel:
+  tools:
+    amap:
+      api-key: ${AMAP_API_KEY}
+      base-url: ${AMAP_BASE_URL:https://restapi.amap.com}
+      connect-timeout: ${AMAP_CONNECT_TIMEOUT:3000}
+      read-timeout: ${AMAP_READ_TIMEOUT:5000}

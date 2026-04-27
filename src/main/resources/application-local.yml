@@ -1,0 +1,23 @@
+spring:
+  ai:
+    openai:
+      # 直接填入你的 DeepSeek API Key
+      api-key: sk-ee45d4497b444247ae8a56b2db8f482b
+    zhipuai:
+      # 直接填入你的智谱 API Key
+      api-key: 5e41ea53cb684cee88ac71c6ceeed837.wq4PueqBryghVedU
+
+  datasource:
+    # 直接填入你申请的阿里云 RDS 外网地址
+    url: jdbc:postgresql://pgm-bp114626pqq3g981io.rwlb.rds.aliyuncs.com:5432/Travel-agent
+    username: my_user
+    password: 15055384780Zsy
+
+  # 如果有其他需要隐藏的私密配置，也可以写在这里
+travel:
+  tools:
+    amap:
+      api-key: "2a1641999a60ac5eb6e325346f531329"
+      base-url: "https://restapi.amap.com"
+      connect-timeout: 3000
+      read-timeout: 5000
