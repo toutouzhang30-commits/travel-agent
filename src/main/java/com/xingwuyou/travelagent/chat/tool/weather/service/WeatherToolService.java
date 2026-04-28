@@ -4,11 +4,16 @@ import com.xingwuyou.travelagent.chat.dto.SourceReferenceDto;
 import com.xingwuyou.travelagent.chat.tool.amap.AmapDistrictResolver;
 import com.xingwuyou.travelagent.chat.tool.weather.client.AmapWeatherClient;
 import com.xingwuyou.travelagent.chat.tool.weather.dto.AmapForecastResponse;
+import com.xingwuyou.travelagent.chat.tool.weather.dto.WeatherForecastDay;
 import com.xingwuyou.travelagent.chat.tool.weather.dto.WeatherToolRequest;
 import com.xingwuyou.travelagent.chat.tool.weather.dto.WeatherToolResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
+import java.util.List;
+
+//只做边界控制，不做语言理解
 @Component
 public class WeatherToolService {
     private static final String AMAP_WEATHER_DOC_URL =
@@ -46,15 +51,40 @@ public class WeatherToolService {
                 return failure(request, "高德天气接口调用失败：" + response.info());
             }
 
-            //这个获取的是json里面的城市
             AmapForecastResponse.Forecast forecast = response.forecasts().get(0);
+            if (forecast.casts() == null || forecast.casts().isEmpty()) {
+                return failure(request, "高德天气没有返回可用预报。");
+            }
 
-            //高德返回了几天的数据，询问是否超界
-            if (forecast.casts() == null || forecast.casts().size() <= request.dayOffset()) {
+            //原先只能有一天的，现在组装循环可以输出多天的天气
+            int fromIndex = Math.max(0, request.dayOffset());
+            int requestedDays = Math.max(1, request.days());
+
+            if (fromIndex >= forecast.casts().size()) {
                 return failure(request, "高德天气没有返回对应日期的预报。");
             }
 
-            AmapForecastResponse.Cast cast = forecast.casts().get(request.dayOffset());
+            int toIndex = Math.min(forecast.casts().size(), fromIndex + requestedDays);
+
+            List<WeatherForecastDay> forecastDays = new ArrayList<>();
+            for (int i = fromIndex; i < toIndex; i++) {
+                AmapForecastResponse.Cast cast = forecast.casts().get(i);
+
+                forecastDays.add(new WeatherForecastDay(
+                        i,
+                        cast.date(),
+                        dayLabel(i),
+                        cast.dayweather(),
+                        cast.nightweather(),
+                        cast.daytemp(),
+                        cast.nighttemp(),
+                        cast.daywind(),
+                        cast.nightwind(),
+                        buildAdvice(cast)
+                ));
+            }
+
+            WeatherForecastDay firstDay = forecastDays.getFirst();
 
             SourceReferenceDto source = SourceReferenceDto.tool(
                     forecast.city(),
@@ -68,15 +98,16 @@ public class WeatherToolService {
             return new WeatherToolResponse(
                     true,
                     forecast.city(),
-                    request.dayOffset(),
-                    cast.date(),
-                    cast.dayweather(),
-                    cast.nightweather(),
-                    cast.daytemp(),
-                    cast.nighttemp(),
-                    cast.daywind(),
-                    cast.nightwind(),
-                    buildAdvice(cast),
+                    firstDay.dayOffset(),
+                    firstDay.date(),
+                    firstDay.dayWeather(),
+                    firstDay.nightWeather(),
+                    firstDay.dayTemp(),
+                    firstDay.nightTemp(),
+                    firstDay.dayWind(),
+                    firstDay.nightWind(),
+                    firstDay.advice(),
+                    forecastDays,
                     source,
                     forecast.reporttime(),
                     null
@@ -84,6 +115,15 @@ public class WeatherToolService {
         } catch (Exception e) {
             return failure(request, "天气查询失败：" + e.getMessage());
         }
+    }
+
+    private String dayLabel(int dayOffset) {
+        return switch (dayOffset) {
+            case 0 -> "今天";
+            case 1 -> "明天";
+            case 2 -> "后天";
+            default -> "第%d天".formatted(dayOffset + 1);
+        };
     }
 
     private String buildAdvice(AmapForecastResponse.Cast cast) {
@@ -133,6 +173,7 @@ public class WeatherToolService {
                 null,
                 null,
                 null,
+                List.of(),
                 source,
                 null,
                 errorMessage

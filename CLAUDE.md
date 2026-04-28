@@ -49,12 +49,27 @@ Use the Maven wrapper exclusively:
 - **Refactoring Duty**: When creating a new class, explicitly state which sub-package it belongs to.
 
 ### 5. Workflow & Next Steps
-- **"What's Next"**: When asked about the next step, ALWAYS consult `memory-bank/implementation-plan.md` and provide the next uncompleted task.
-- **Plan Adaptation**: If the user's new requests or the actual development trajectory deviate from the current `implementation-plan.md`, YOU MUST update the plan document to reflect the new reality before proceeding.
+- **"What's Next"**: When asked about the next step, you MUST:
+    1. Consult `memory-bank/implementation-plan.md` to identify the next uncompleted task.
+    2. Outline the specific, step-by-step technical operations** required to complete it (e.g., specific files to create, methods to modify).
+    3. Provide the relevant code snippets, class skeletons, or logic blocks** so the user can immediately understand the implementation path.
+- **Plan Adaptation**: If the user's new requests or the actual development trajectory deviate from the current `implementation-plan.md`, YOU MUST update the plan document to reflect the new reality before proceeding with any code changes.
 
-### 6. Goal-Driven Execution & DoD (Definition of Done)
-- State a brief 1-2-3 step plan before multi-step tasks.
-- **DoD**: For any API changes or core logic updates, you must update `test.http` with boundary test cases according to `memory-bank/testing-standard.md`. **Provide the commands only; the user will execute and verify the tests manually.**
+### 6. Forbidden Implementations (Anti-Patterns)
+* **❌ NO Regex for NLP**: Never use `java.util.regex.Pattern`, `Matcher`, `String.contains()`, or manual `Map<String, Integer>` lookups to parse natural language (e.g., extracting dates, days, cities, or intents).
+* **❌ NO Keyword Routing**: Never use "if-else" keyword matching or boolean flags based on specific substrings to determine the system's execution flow.
+* **❌ NO Fragmented Guardrails**: Business constraints and safety limits (e.g., `MAX_FORECAST_DAYS = 7`) must reside in the **Tool Execution Layer (Gateway/Executor)**, not within the natural language parsing/extraction logic.
+
+### 7. Required Patterns
+* **✅ Structured Output First**: All intent classification and requirement extraction must be handled by the LLM using Spring AI’s `.entity(Class.class)` method to deserialize into strongly-typed Java Records or DTOs (e.g., `IntentRoutingDecision`).
+* **✅ LLM-Driven Parameter Extraction**: For tools like Weather, Maps, or Pricing, utilize **Function Calling/MCP**. Define clear JSON Schemas using `@JsonPropertyDescription` on fields to allow the LLM to translate vague terms (e.g., "the day after tomorrow," "next weekend," "a few days") into structured, actionable parameters.
+* **✅ Temporal Context**: When extracting relative time parameters, the current system date and time must be explicitly injected into the prompt as a reference point for the model.
+
+### 8. Execution Guardrail
+> **STOP AND RE-EVALUATE**: If your internal reasoning suggests generating code involving `Pattern.compile` or manual string manipulation to "understand" the user's request, **STOP immediately**.
+>
+> **Action**: Shift the complexity to the Model. Design a Java Record with semantic descriptions and use a structured prompt to let the LLM handle the mapping.
+
 
 ## 📁 Repo State Note
 Treat the Java source tree as unimplemented scaffolding. The "source of truth" lives entirely in `memory-bank/`.

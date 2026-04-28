@@ -1,313 +1,299 @@
-# 旅游 AI 助手 MVP 技术栈（Java 版）
+# 旅游 Agent 技术栈（统一阶段版）
 
-## 1. 选型目标
-根据当前 PRD 和实施计划，这个项目的核心是 **Web 聊天式旅游规划**，重点能力包括：
-- 聊天式需求收集
-- AI 动态追问与行程生成
-- 多轮修改行程
-- 展示来源与不确定性提示
-- SSE 流式展示 Agent 可见执行过程
-- 后续接入 RAG 与 Tool Calling
+## 1. 文档目的
+这份技术栈文档不只回答“用什么技术”，还回答：
+- 为什么这些技术适合当前项目
+- 这些技术在目标架构里分别承担什么角色
+- 当前哪些技术已经落地，哪些还只是迁移方向
 
-因此技术栈需要优先满足以下目标：
-1. **快速完成 MVP**，避免过度设计
-2. **适合 Java 主栈开发**，降低实现和维护成本
-3. **支持流式聊天体验**，让用户在网页端看到逐步执行过程
-4. **方便后续扩展 RAG、工具调用、会话持久化和来源展示**
-5. **保证结果可追溯**，方便展示来源和不确定性说明
+因此本文档会同时保留：
+- **目标态技术路线**
+- **当前代码现状与阶段性落地强度**
 
 ---
 
-## 2. 推荐技术栈总览
+## 2. 当前项目的技术目标
+根据最新 PRD、架构文档和实施计划，这个项目的核心已经不是“做一个能聊天的旅游页面”，而是做一个：
+- 具备网页聊天体验的旅游 Agent
+- 能做语义路由而不是关键词分流
+- 能同时利用内部知识与外部证据
+- 能通过 Spring AI `@Tool` 主线处理实时问题
+- 能用 Working Memory 和 Reflection loop 持续修正结果
 
-| 层级 | 推荐技术 | 作用 | 选择原因 |
+因此技术栈需要优先满足以下要求：
+1. 能支撑 Web 聊天页 + SSE 流式过程展示
+2. 能支撑结构化输出、强类型路由和 itinerary 生成/修改
+3. 能支撑内部知识库与外部证据的混合检索
+4. 能支撑 Spring AI `@Tool` 主线，并保留后续 MCP 扩展空间
+5. 能支撑 Working Memory、Reflection 和后续持久化
+
+---
+
+## 3. 推荐技术栈总览
+
+| 层级 | 推荐技术 | 在本项目中的角色 | 当前状态 |
 | --- | --- | --- | --- |
-| 开发语言 | Java 21 | 后端主语言 | 现代 Java 版本，语法和性能都适合新项目 |
-| 后端框架 | Spring Boot 4 | 应用启动、接口开发、配置管理 | Java 生态成熟，适合快速搭建业务系统 |
-| Web 层 | Spring MVC | 提供页面和 API | 对当前 Web 聊天室 + SSE 场景足够，复杂度低于全响应式方案 |
-| 页面模板 | Thymeleaf | 聊天页 HTML 渲染 | 适合 Java 单体 MVP，和 Spring MVC 配合简单直接 |
-| 前端交互 | 原生 JavaScript | 发送消息、消费 SSE、更新 DOM | 当前页面交互简单，先不引入额外前端框架 |
-| AI 集成 | Spring AI | 统一接入大模型、Prompt、结构化输出、后续 Tool Calling | 与 Spring 体系兼容，便于后续扩展 |
-| 模型接入 | DeepSeek OpenAI 兼容 API | 真实模型调用 | 当前仓库已验证，先收敛到单一 provider 降低复杂度 |
-| 向量检索 | Spring AI PgVector | RAG 检索 | 直接使用可持久化向量库，支撑跨重启保存与后续检索扩展 |
-| 网页采集 | Spring `RestClient` + Jsoup | 受控抓取公开网页、解析 HTML、抽取正文 | 满足 Phase 3B 的白名单采集与内容清洗，复杂度低于直接引入浏览器自动化 |
-| 高级 RAG | 多路召回 + 重排 + 上下文压缩 | 提升检索质量 | 避免只靠单路向量召回，支撑旅游专有名词、区域、主题和来源可信度排序 |
-| 短期记忆 | 内存态 WorkingMemory / SessionState 扩展 | 路由、检索、工具调用和 Reflection 的上下文 | 必须早于正式持久化进入主链路 |
-| Reflection | 轻量校验器 + LLM 结构化校验 | 检查结果是否满足约束并触发局部修正 | 避免行程生成后缺少纠错闭环 |
-| 数据库 | MySQL 8 | 后续存储会话、行程版本、来源快照等业务数据 | 结构化业务数据与向量检索分层管理，避免职责混淆 |
-| ORM | Spring Data JPA | 数据访问层 | 对 Java 项目开发效率高，适合后续持久化阶段 |
-| 会话缓存 | 内存态 SessionStateStore | Phase 1/2 会话状态 | 当前先满足网页聊天室闭环，后续再持久化 |
-| 流式输出 | SSE | 向网页端推送状态、回答、itinerary 等事件 | 比 WebSocket 更轻量，符合当前单向流式回复场景 |
-| 可观测性 | Spring Boot Actuator + Micrometer | 健康检查、接口监控、工具/检索链路监控 | 便于后续上线准备 |
-| 测试 | JUnit 5 + Spring Boot Test + MockMvc | 单元测试、接口测试 | 与 Spring Boot 主栈天然配合 |
-| 构建部署 | Maven + Docker + Nginx | 构建、打包、部署、反向代理 | Java Web 项目的标准化部署方式 |
+| 开发语言 | Java 21 | 后端主语言 | 已确定 |
+| 后端框架 | Spring Boot 4 | 应用启动、配置、整合主框架 | 已确定 |
+| Web 层 | Spring MVC | 页面与 API 主栈 | 已落地 |
+| 页面模板 | Thymeleaf | MVP 网页聊天页 | 已落地 |
+| 前端交互 | 原生 JavaScript | 发送消息、消费 SSE、更新页面 | 已落地 |
+| 流式输出 | SSE | 展示用户可见执行过程 | 已落地 |
+| AI 编排基础 | Spring AI | 结构化输出、模型调用、后续工具整合 | 已落地 |
+| 模型接入 | DeepSeek OpenAI 兼容 API | 当前主模型路径 | 已落地 |
+| 内部知识库 | Spring AI PgVector | 内部 RAG 知识检索 | 已完成最小闭环 |
+| RAG 入库幂等 | PostgreSQL manifest 表 + JdbcTemplate | 控制启动入库、重建和 active run | 当前稳定性补强 |
+| 网页治理采集 | RestClient + Jsoup | 受控获取和清洗公开网页知识 | 目标态，未完整落地 |
+| 外部证据能力 | 受控网页采集 / 后续可选 MCP search/browser | 为高级 RAG 补 freshness 与覆盖率 | Phase 3B 目标，MCP 未落地 |
+| 主工具层 | Spring AI `@Tool` | 实时能力主工具调用方式 | 当前主线 |
+| 后续工具协议 | MCP（可选） | 未来外部工具协议扩展 | 后续选项，当前非必须 |
+| 过渡工具底座 | 本地 service/client + 统一工具网关 | 承接天气等已存在能力，向 `@Tool` 主线过渡 | 部分已存在 |
+| Working Memory | 内存态 SessionState 扩展 | 支撑多轮路由、检索、工具、反思 | 现状偏薄，需升级 |
+| Reflection | Java 规则 + LLM 结构化校验 | 有界自检与局部修正 | 目标态，未入主链路 |
+| 业务数据存储 | MySQL 8 | 会话、版本、来源快照等持久化 | 目标态，未进入主线 |
+| ORM | Spring Data JPA | 正式持久化阶段的数据访问 | 依赖已在项目中 |
+| 测试 | JUnit 5 + Spring Boot Test + MockMvc | 单元测试、接口测试 | 适用 |
+| 构建 | Maven | 构建和依赖管理 | 已使用 |
+| 部署 | Docker + Nginx | 后续部署与反向代理 | 目标态 |
+| 可观测性 | Actuator + Micrometer | 健康检查、链路监控、工具/检索指标 | 后续阶段 |
 
 ---
 
-## 3. 为什么这套技术栈适合当前 MVP
+## 4. 为什么这套技术栈适合当前项目
 
-### 3.1 适合 Phase 2 的最小可演示网页聊天室
-当前最优先目标不是做复杂前端工程，而是先完成：
-- 可打开的聊天页面
-- 输入消息后可调用后端流式接口
-- 页面能逐步显示状态、回答和 itinerary
+### 4.1 适合当前 Web 聊天式 Agent 形态
+当前项目已经明确要保留：
+- 网页聊天页
+- SSE 事件流
+- 后端主导的编排逻辑
 
-因此页面层优先采用：
-- **Spring Boot + Thymeleaf**
-- **原生 JavaScript**
-- **SSE 流式输出**
+所以 Web 层继续采用：
+- Spring MVC
+- Thymeleaf
+- 原生 JavaScript
+- SSE
 
-这样可以最快做出：
-- 聊天输入框
-- 消息列表
-- 状态区
-- itinerary 展示区
-- 来源区占位
+这条路线的优点是：
+- 实现路径短
+- 与当前仓库状态一致
+- 更适合快速验证“聊天 + 检索 + 工具 + itinerary + 过程展示”的整体闭环
+- 不会过早把注意力带到复杂前端工程化上
 
-比起一开始就引入 React、Vue、HTMX 或更复杂的样式体系，这条路线更贴合当前 Phase 2 的目标。
+### 4.2 适合结构化路由与 itinerary 生成/修改
+项目的关键问题已经不是“调用模型能不能回话”，而是“系统能不能稳定判断当前到底该干什么”。
 
-### 3.2 适合“行程生成 + 多轮修改”
-这个项目不是一次性问答，而是：
-- 用户输入初始需求
-- AI 动态追问补齐信息
-- 生成按天行程
-- 用户继续修改
-- AI 在已有结果基础上调整
+Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
+- 结构化输出
+- 强类型 schema
+- 便于接入 itinerary 生成 / itinerary 修改 / 路由结果输出
+- 为后续工具和检索编排提供统一入口
 
-所以后端核心不是简单 Controller，而是要有一层 **Agent 编排服务层**。Spring AI 与当前已有的编排组件适合承担这层职责，用来：
-- 理解用户意图
-- 组织会话上下文
-- 输出结构化 itinerary
-- 后续接入检索和工具结果
+因此，Spring AI 依旧是合适的主 AI 框架。
 
-### 3.3 适合“来源展示”和“不确定性提示”
-当前路线明确要求：
-- 要显示来源
-- 数据不可靠时要明确提示
-- 不能假装准确
+### 4.3 适合混合 RAG
+旅游知识不应该只靠内部向量库，也不应该完全依赖外部搜索。
 
-所以系统需要保留：
-- 来源名称
-- 来源链接
-- 校验时间 / 更新时间
-- 可信度标记
+所以技术上需要两层能力：
 
-这类结构化信息适合在后续阶段放入 **MySQL** 管理，而不是完全依赖模型临时生成文本。
-
-### 3.4 适合后续演进，不提前引入超前复杂度
-当前项目会逐步演进到：
-- Web 聊天室
-- RAG 检索
-- Tool Calling
-- 会话持久化
-- 来源与不确定性闭环
-
-因此技术栈需要“**现在够简单，后续能扩**”。
-
-选择 Spring MVC + Thymeleaf + 原生 JS + SSE，有几个直接好处：
-1. 当前 Phase 2 实现成本低
-2. 不妨碍后续继续保留 API 层
-3. 页面和后端都在同一项目里，调试路径短
-4. 后续如果页面复杂度变高，再拆前后端也还来得及
-
----
-
-## 4. 推荐系统架构
-
-推荐采用 **单体应用优先** 的方式：
-
-```text
-用户浏览器
-   ↓
-Spring Boot Web 应用
-   ├─ 页面入口 Controller
-   ├─ 聊天 API / SSE API
-   ├─ Agent 编排服务
-   ├─ 需求抽取 / 完整度判断
-   ├─ itinerary 生成 / 修改
-   ├─ 会话状态管理
-   ├─ 后续接入 Retrieval / Tools / Source
-   └─ 数据访问层（后续）
-           ↓
-         MySQL
-           ↓
-     DeepSeek OpenAI 兼容 API
-```
-
-这种结构的优点是：
-- 上手快
-- Java 项目结构统一
-- 部署简单
-- 页面和 API 可以清晰分层
-- 后续还能逐步接入 RAG、Tools 和持久化
-
----
-
-## 5. 核心模块建议
-
-### 5.1 页面层
-负责：
-- 渲染聊天页面
-- 展示消息列表
-- 展示状态区
-- 展示 itinerary 卡片
-- 展示来源区占位
-
-**推荐技术：** Thymeleaf + 原生 JavaScript
-
-### 5.2 API 层
-负责：
-- 接收网页端消息
-- 提供同步接口和流式接口
-- 返回结构化 SSE 事件
-- 统一处理参数错误和流式异常
-
-**推荐技术：** Spring MVC Controller + SseEmitter
-
-### 5.3 AI 编排层
-负责：
-- 识别用户意图
-- 判断信息是否完整
-- 动态追问
-- 生成结构化行程
-- 根据用户反馈修改行程
-- 后续决定是否需要检索或调用工具
-
-**推荐技术：** Spring AI + AgentOrchestratorService
-
-### 5.4 状态管理层
-负责：
-- 按 sessionId 保存当前需求状态
-- 保存当前有效 itinerary
-- 为多轮聊天提供上下文
-
-**当前推荐实现：** 内存态 SessionStateStore + WorkingMemoryService
-
-短期工作记忆需要提前承担：
-- 当前需求画像
-- 当前 itinerary 摘要
-- 最近用户修改意图
-- 最近 RAG 检索摘要和来源
-- 最近工具调用摘要和失败状态
-- Reflection 发现的问题和修正结果
-
-### 5.5 数据层
-后续存储内容建议包括：
-- ChatSession
-- ConversationTurn
-- TripRequirementProfile
-- ItineraryVersion
-- SourceReference
-
-**推荐技术：** MySQL + JPA
-
-### 5.6 高级 RAG 层
-负责：
-- 受控网页采集
-- HTML 清洗与正文抽取
-- 文档去重与内容 hash
-- chunk 策略
-- 向量召回
-- 关键词召回
+#### A. 内部知识库
+- Spring AI PgVector
+- 受控文档入库
 - 元数据过滤
-- 会话上下文召回
-- 重排
-- 上下文压缩
+- 后续多路召回与重排
+- PostgreSQL manifest 表记录内容指纹、pipeline 指纹、active run 和入库状态
 
-**推荐技术：** Spring `RestClient` + Jsoup + Spring AI PgVector + 轻量重排服务
+它负责稳定、可治理、可复用的旅游知识。
 
-说明：
-- 静态网页优先用 `RestClient` + Jsoup
-- JavaScript 强依赖页面暂不作为 Phase 3B 默认范围
-- 不把运行时临时爬网页作为问答主路径
-- 采集数据必须先入库、治理、索引，再进入 RAG 检索
+#### C. 入库幂等与重建
+- 使用 `JdbcTemplate` 管理 `rag_ingestion_manifest` 表。
+- 使用 SHA-256 计算 `rag/*.md` 文件名 + 内容的 `content_hash`。
+- 使用配置化 `pipeline-version`、chunk 策略、metadata 字段、embedding model / dimensions 生成 `pipeline_hash`。
+- 只有 manifest 为 `COMPLETED` 且两个 hash 都一致时，才跳过启动入库。
+- 通过 `IN_PROGRESS / COMPLETED / FAILED` 状态和事务边界避免半完成入库被误认为成功。
 
-### 5.7 Reflection 层
-负责：
-- 校验 itinerary 是否满足用户约束
-- 校验来源与结论是否匹配
-- 校验工具失败是否被明确提示
-- 校验修改请求是否真正落实
-- 对明显问题触发局部修正
+#### B. 外部证据能力
+- 受控网页采集，以及后续可选 MCP search / browser 等能力
+- 用于补 freshness、补覆盖、补知识库缺口
 
-**推荐技术：** Java 规则校验 + Spring AI 结构化输出校验
+它负责让系统在知识库未覆盖时仍能拿到新鲜证据，但这些证据仍需进入来源、排序和不确定性约束。
+
+### 4.4 适合工具层分阶段落地
+当前阶段工具调用主线应是 Spring AI `@Tool`，MCP 只作为后续可选外部工具协议扩展。
+
+但从当前仓库看：
+- 还没有真实 MCP integration
+- 已有天气 API service/client
+- 现有工具仍更像本地 service 调用
+
+所以技术路线不应写成“当前就是 MCP-first fully integrated”，而应写成：
+- **Spring AI `@Tool` 是当前工具调用主线**
+- 当前先保留本地工具底座
+- 先通过统一工具网关让编排器面向统一接口
+- 后续如确有需要，再逐步接入真实 MCP tool 能力
+
+这比“一步到位重做所有工具集成”更稳。
+
+### 4.5 适合 Working Memory 与 Reflection loop
+旅游 Agent 不是一次性回答系统，多轮上下文很重要。
+
+因此技术栈必须支撑：
+- 内存态 Working Memory
+- 结构化反思结果
+- 有界修正循环
+
+这里当前最合适的路线是：
+- 先用内存态 `SessionStateStore` 演进为 Working Memory 容器
+- Reflection 用 Java 规则 + LLM 结构化校验组合
+- 正式持久化延后到 MySQL 阶段
+
+这样既能尽快把链路跑通，也不会把当前阶段拖入过重的持久化设计。
 
 ---
 
-## 6. MVP 阶段的技术取舍建议
+## 5. 分层技术角色
 
-### 建议先做
-1. **单体架构**，不要一开始拆微服务
-2. **Spring MVC**，不要同时维护 MVC 和 WebFlux 两套模式
-3. **SSE**，不要先上 WebSocket
-4. **Thymeleaf + 原生 JavaScript**，不要先上复杂前端框架
-5. **内存态 session**，不要在 Phase 2 就先做正式持久化
-6. **结构化事件流**，不要只返回大段自然语言
-7. **保留 API 层**，不要把业务逻辑放进页面脚本里
-8. **短期工作记忆**，不要等 Phase 7 数据库持久化才开始管理上下文
-9. **结构化路由输出**，不要让模型输出自然语言后再做字符串解析
-10. **高级 RAG 基础设施**，不要长期停留在单路向量召回
+### 5.1 Web 层
+**推荐技术：** Spring MVC + Thymeleaf + 原生 JavaScript + SSE
 
-### 暂时不建议优先做
-- React / Vue 等复杂前端工程化
-- 会话列表和账户体系
+**职责：**
+- 渲染聊天页
+- 接收用户消息
+- 消费结构化 SSE 事件
+- 展示消息、来源、工具状态和 itinerary
+
+**不承担：**
+- Prompt 拼接
+- 工具编排
+- 路由决策
+- 状态持久化逻辑
+
+### 5.2 编排层
+**推荐技术：** Spring Boot Service + Spring AI
+
+**职责：**
+- 读取 Working Memory
+- 执行结构化路由
+- 调度检索 / 工具 / itinerary 生成与修改
+- 执行 Reflection loop
+- 组织 SSE 输出
+
+### 5.3 内部知识层
+**推荐技术：** Spring AI PgVector
+
+**职责：**
+- 保存稳定旅游知识
+- 按城市、主题等条件过滤
+- 为知识问答、行程生成和修改提供基础检索能力
+
+### 5.4 外部证据层
+**推荐技术：** 受控网页采集 + 后续可选 MCP search / browser 能力 + 治理流程
+
+**职责：**
+- 补知识库没有的公开信息
+- 补 freshness
+- 为高价值内容提供后续治理入库候选
+
+### 5.5 主工具层
+**当前主线技术：** Spring AI `@Tool`
+
+**后续可选技术：** MCP
+
+**职责：**
+- 提供天气、路线、票价、搜索、浏览等能力
+- 输出规范化工具结果、来源、时间和失败状态
+- 与 SSE 的 `tool_call` / `tool_result` 对齐
+
+### 5.6 Working Memory
+**当前推荐技术：** 内存态 SessionState 扩展
+
+**职责：**
+- 保存当前 requirement profile
+- 保存 itinerary 摘要
+- 保存最近检索 / 工具 / 反思上下文
+- 为下一轮路由和修正提供上下文基础
+
+### 5.7 Reflection
+**推荐技术：** Java 规则校验 + LLM 结构化校验
+
+**职责：**
+- 检查结果是否满足用户约束
+- 检查知识或工具证据是否不足
+- 检查修改是否落实
+- 触发一次有界修正
+
+### 5.8 持久化层
+**推荐技术：** MySQL 8 + Spring Data JPA
+
+**职责：**
+- 保存正式会话
+- 保存 itinerary 版本
+- 保存来源快照
+- 保存后续可恢复状态
+
+**当前状态：**
+- 还不是主链路优先项
+- 需在 Working Memory 路线稳定后再正式接入
+
+---
+
+## 6. 当前技术取舍建议
+### 当前应该优先坚持的
+1. Spring MVC 主栈
+2. SSE 事件流
+3. Spring AI 结构化输出能力作为路由主基础
+4. 先修复 RAG Manifest 幂等入库，避免重复切分、重复 embedding、重复写库
+5. 先替换关键词/限制词主分流，再扩展高级 RAG
+6. PgVector 作为内部知识库路线
+7. 内存态 Working Memory 先行，优先服务路由上下文
+8. Spring AI `@Tool` 作为当前工具主线，MCP 仅作为后续可选扩展
+9. Reflection 尽早进入主链路
+
+### 当前不建议优先推进的
+- React / Vue 等复杂前端框架
 - 微服务拆分
-- Redis 集群
-- 重量级工作流引擎
-- PgVector 级别的向量数据库（已转为当前确定路线，不再列为暂缓项）
+- 重量级 workflow 引擎
+- 把所有外部网页搜索直接等价成 RAG
+- 把 MCP 写成“现在必须落地”或“已经完全可用”的现状
+- 在主分流还不稳定时先铺开大量新工具
+- 在关键词主分流还存在时优先扩展 Phase 3B 高级 RAG
 - PDF 导出
 
-原因很简单：当前目标是先验证“**网页聊天室 + 流式 Agent 过程展示**”是否能顺畅跑通，而不是先做平台化能力。
-
 ---
 
-## 7. 与当前项目的对应建议
-
-从当前项目状态看，已经具备：
+## 7. 当前代码与技术栈的对应关系
+### 已经和路线一致的部分
 - Java 21
 - Spring Boot
 - Spring MVC
+- SSE
+- Thymeleaf
 - Spring AI
-- Maven
-- DeepSeek 真实模型接入
-- 同步 / 流式聊天 API
-- 最小会话状态管理
+- DeepSeek OpenAI 兼容 API
+- PgVector 基础方向
+- 最小天气 API service/client 底座
 
-这和上面的推荐方向是一致的。
-
-对于当前阶段，建议继续做两个收敛：
-
-### 7.1 页面层和 API 层分开
-建议页面入口和聊天接口分开：
-- 页面入口 Controller：负责返回 HTML 页面
-- ChatController：负责 `/api/chat` 与 `/api/chat/stream`
-
-这样职责更清晰，也更符合后续页面与接口并行演进的方向。
-
-### 7.2 模型接入先收敛到单一路径
-当前已验证 DeepSeek 路径，因此建议先继续使用：
-- **DeepSeek OpenAI 兼容 API**
-
-先保证主链路稳定，再考虑是否需要引入更多 provider 或本地模型调试方案。
+### 还需要补齐的部分
+- RAG Manifest 幂等入库、pipeline version 和 active run 检索过滤
+- 结构化路由真正落地，并替换关键词/限制词主分流
+- RAG / Tool / itinerary 统一由路由结果驱动
+- Working Memory 扩展，先服务路由上下文
+- Reflection loop 主链路化
+- 统一工具网关
+- 后续可选的 MCP integration
+- 外部证据能力
+- 路由稳定后的混合 RAG 排序与压缩
 
 ---
 
-## 8. 最终推荐版本
+## 8. 最终推荐技术路线
+如果只用一句话总结当前阶段最合适的技术栈策略，那就是：
 
-如果只给当前阶段一个最适合的技术栈方案，我建议是：
+- **Web 与交互**：Spring MVC + Thymeleaf + 原生 JavaScript + SSE
+- **模型与结构化输出**：Spring AI + DeepSeek OpenAI 兼容 API，先用于结构化路由
+- **内部知识库**：Spring AI PgVector
+- **入库一致性**：PostgreSQL manifest 表 + JdbcTemplate + content/pipeline hash
+- **外部证据与工具方向**：Spring AI `@Tool` 当前优先，MCP 后续可选；高级 RAG 在路由稳定后补强
+- **上下文与修正**：内存态 Working Memory + Java/LLM 结合的 Reflection loop，优先支撑路由和局部修正
+- **持久化**：后续以 MySQL + JPA 承接正式状态
 
-- **语言**：Java 21
-- **后端**：Spring Boot 4 + Spring MVC
-- **页面模板**：Thymeleaf
-- **前端交互**：原生 JavaScript
-- **AI 框架**：Spring AI
-- **模型接入**：DeepSeek OpenAI 兼容 API
-- **向量检索**：Spring AI PgVector（Phase 3）
-- **数据库**：MySQL 8（Phase 7）
-- **状态管理**：内存态 SessionStateStore（当前阶段）
-- **流式输出**：SSE
-- **测试**：JUnit 5 + Spring Boot Test + MockMvc
-- **构建部署**：Maven + Docker + Nginx
-- **监控**：Actuator + Micrometer
-
-这套方案的核心特点是：**实现路径短、和当前仓库状态一致、能支撑后续 RAG + Tool Calling + 持久化演进。**
+这条路线的关键优点是：**与当前仓库状态衔接自然，同时能支撑从“聊天骨架”演进到“真正旅游 Agent”。**

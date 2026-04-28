@@ -15,6 +15,10 @@ import com.xingwuyou.travelagent.chat.tool.weather.dto.WeatherToolResponse;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
+import com.xingwuyou.travelagent.chat.routing.IntentAction;
+import com.xingwuyou.travelagent.chat.routing.IntentRoutingDecision;
+import com.xingwuyou.travelagent.chat.routing.IntentRoutingService;
+
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -26,48 +30,52 @@ public class AgentOrchestratorService implements ChatService {
     private final TripRequirementExtractor extractor;
     private final RequirementCompletenessChecker checker;
     private final ItineraryGenerator generator;
-    private final ItineraryModificationDetector detector;
+    //private final ItineraryModificationDetector detector;
     private final ItineraryModifier modifier;
     private final SessionStateStore sessionStateStore;
-    private final RagRetrievalDecider ragRetrievalDecider;
+    //private final RagRetrievalDecider ragRetrievalDecider;
     private final RagRetrievalService ragRetrievalService;
     private final RagContextAssembler ragContextAssembler;
     private final RagAnswerGenerator ragAnswerGenerator;
-    private final ToolCallDecider toolCallDecider;
+    //private final ToolCallDecider toolCallDecider;
     private final WeatherQueryExtractor weatherQueryExtractor;
     private final WeatherTool weatherTool;
     private final ToolAnswerGenerator toolAnswerGenerator;
+    private final IntentRoutingService intentRoutingService;
+
 
     public AgentOrchestratorService(
             TripRequirementExtractor extractor,
             RequirementCompletenessChecker checker,
             ItineraryGenerator generator,
-            ItineraryModificationDetector detector,
+            //ItineraryModificationDetector detector,
             ItineraryModifier modifier,
             SessionStateStore sessionStateStore,
-            RagRetrievalDecider ragRetrievalDecider,
+            //RagRetrievalDecider ragRetrievalDecider,
             RagRetrievalService ragRetrievalService,
             RagContextAssembler ragContextAssembler,
             RagAnswerGenerator ragAnswerGenerator,
-            ToolCallDecider toolCallDecider,
+            //ToolCallDecider toolCallDecider,
             WeatherQueryExtractor weatherQueryExtractor,
             WeatherTool weatherTool,
-            ToolAnswerGenerator toolAnswerGenerator
-    ) {
+            ToolAnswerGenerator toolAnswerGenerator,
+            IntentRoutingService intentRoutingService
+            ) {
         this.extractor = extractor;
         this.checker = checker;
         this.generator = generator;
-        this.detector = detector;
+        //this.detector = detector;
         this.modifier = modifier;
         this.sessionStateStore = sessionStateStore;
-        this.ragRetrievalDecider = ragRetrievalDecider;
+        //this.ragRetrievalDecider = ragRetrievalDecider;
         this.ragRetrievalService = ragRetrievalService;
         this.ragContextAssembler = ragContextAssembler;
         this.ragAnswerGenerator=ragAnswerGenerator;
-        this.toolCallDecider = toolCallDecider;
+        //this.toolCallDecider = toolCallDecider;
         this.weatherQueryExtractor = weatherQueryExtractor;
         this.weatherTool = weatherTool;
         this.toolAnswerGenerator = toolAnswerGenerator;
+        this.intentRoutingService = intentRoutingService;
     }
 
     //为什么需要新增这个内部record?
@@ -84,17 +92,37 @@ public class AgentOrchestratorService implements ChatService {
         String sessionId = resolveSessionId(chatRequest);
 
         SessionState currentState = sessionStateStore.get(sessionId);
+        //这个确定问题的类型
+        IntentRoutingDecision route = intentRoutingService.route(chatRequest.message(), currentState);
 
-        ChatResponse response;
-        if (toolCallDecider.shouldUseWeatherTool(chatRequest.message())) {
-            response = executeWeatherToolFlow(sessionId, chatRequest.message(), currentState).response();
-        } else {
-            response = orchestrate(sessionId, chatRequest.message(), currentState);
-        }
+        ChatResponse response = orchestrateByRoute(sessionId, chatRequest.message(), currentState, route);
 
         sessionStateStore.save(sessionId, currentState.merge(response.requirement(), response.itinerary()));
         return response;
     }
+
+    //目前走什么路径使用这个方法进行判断
+    private ChatResponse orchestrateByRoute(String sessionId, String message, SessionState currentState, IntentRoutingDecision route) {
+        if (route == null || route.action() == null) {
+            return buildRoutingFailedResponse(sessionId);
+        }
+
+        return switch (route.action()) {
+            case WEATHER_TOOL -> executeWeatherToolFlow(sessionId, message, currentState).response();
+
+            case PRICING_TOOL, MAPS_TOOL -> buildRealtimeUnsupportedResponse(sessionId);
+
+            case KNOWLEDGE_QA -> handleKnowledgeAnswer(sessionId, message, currentState, route);
+
+            case MODIFY_ITINERARY -> handleItineraryModification(sessionId, message, currentState, route);
+
+            case COLLECT_REQUIREMENT, GENERATE_ITINERARY -> handleRequirementAndGeneration(sessionId, message, currentState, route);
+
+            case ROUTING_FAILED -> buildRoutingFailedResponse(sessionId);
+        };
+    }
+
+
 
     //流式回答
     //最后返回的都是agentevent，这个返回是怎么在controller用，用在前端的？
@@ -105,23 +133,10 @@ public class AgentOrchestratorService implements ChatService {
 
         return Flux.defer(() -> {
             SessionState currentState = sessionStateStore.get(sessionId);
-            if (toolCallDecider.shouldUseWeatherTool(chatRequest.message())) {
-                ToolFlowResult flowResult = executeWeatherToolFlow(sessionId, chatRequest.message(), currentState);
-                ChatResponse response = flowResult.response();
 
-                sessionStateStore.save(sessionId, currentState.merge(response.requirement(), response.itinerary()));
+            IntentRoutingDecision route = intentRoutingService.route(chatRequest.message(), currentState);
+            ChatResponse response = orchestrateByRoute(sessionId, chatRequest.message(), currentState, route);
 
-                List<AgentEvent> events = new ArrayList<>();
-                events.add(AgentEvent.status(sessionId, "正在调用天气工具"));
-                events.add(AgentEvent.toolCall(sessionId, flowResult.toolCallPayload().summary(), flowResult.toolCallPayload()));
-                events.add(AgentEvent.toolResult(sessionId, flowResult.toolResultPayload().summary(), flowResult.toolResultPayload()));
-                events.add(AgentEvent.answer(sessionId, response));
-                events.add(AgentEvent.done(sessionId));
-
-                return Flux.fromIterable(events);
-            }
-
-            ChatResponse response = orchestrate(sessionId, chatRequest.message(), currentState);
             sessionStateStore.save(sessionId, currentState.merge(response.requirement(), response.itinerary()));
 
             AgentEvent resultEvent = switch (response.type()) {
@@ -212,21 +227,13 @@ public class AgentOrchestratorService implements ChatService {
         };
     }
 
-    private ChatResponse orchestrate(String sessionId, String message, SessionState currentState) {
-       //改成拦截价格
-        if (toolCallDecider.shouldUsePricingTool(message)) {
-            return buildRealtimeUnsupportedResponse(sessionId);
-        }
 
-        if (ragRetrievalDecider.shouldAnswerKnowledge(message)) {
-            return handleKnowledgeAnswer(sessionId, message, currentState);
-        }
-
-        if (detector.isModificationRequest(message, currentState.itinerary())) {
-            return handleItineraryModification(sessionId, message, currentState);
-        }
-
-
+    private ChatResponse handleRequirementAndGeneration(
+            String sessionId,
+            String message,
+            SessionState currentState,
+            IntentRoutingDecision route
+    ) {
         TripRequirement extracted = extractWithContext(message, currentState);
         TripRequirement merged = mergeRequirement(currentState.requirement(), extracted);
 
@@ -244,19 +251,19 @@ public class AgentOrchestratorService implements ChatService {
         List<SourceReferenceDto> sources = List.of();
         String ragContext = "";
 
-        //知识库对于第一次生成计划表
-        if (ragRetrievalDecider.shouldRetrieveForItineraryGeneration(message, merged)) {
-            RagQuery query = new RagQuery(message, merged.destination(), null, 3);
+        if (route.requiresRetrieval()) {
+            RagQuery query = new RagQuery(message, merged.destination(), route.topic(), 3);
             retrievalResults = ragRetrievalService.retrieve(query);
             sources = ragContextAssembler.toSources(retrievalResults);
             ragContext = ragContextAssembler.buildContext(retrievalResults);
         }
 
         Itinerary itinerary = generator.generate(merged, ragContext);
+
         return new ChatResponse(
                 sessionId,
                 ChatResponseType.ITINERARY,
-                "已为你生成最小行程结构。",
+                "已为你生成最小行程结果。",
                 merged,
                 List.of(),
                 null,
@@ -264,6 +271,20 @@ public class AgentOrchestratorService implements ChatService {
                 sources
         );
     }
+
+    private ChatResponse buildRoutingFailedResponse(String sessionId) {
+        return new ChatResponse(
+                sessionId,
+                ChatResponseType.FOLLOW_UP,
+                "我还不确定你是想查旅游知识、查实时信息、生成行程，还是修改已有行程。",
+                null,
+                List.of("intent"),
+                "你可以换个说法告诉我：是想查攻略、查天气/票价/路线，还是让我生成或修改行程？",
+                null,
+                List.of()
+        );
+    }
+
 
     //是否回答实时问题
     //实时问题兜底
@@ -282,8 +303,9 @@ public class AgentOrchestratorService implements ChatService {
     }
 
     //处理知识问答问题
-    private ChatResponse handleKnowledgeAnswer(String sessionId, String message, SessionState currentState) {
-        String city = extractCityFromMessage(message);
+    private ChatResponse handleKnowledgeAnswer(String sessionId, String message, SessionState currentState, IntentRoutingDecision route) {
+        //String city = extractCityFromMessage(message);
+        String city=route.city();
 
         if (!StringUtils.hasText(city)
                 && currentState.requirement() != null
@@ -324,21 +346,21 @@ public class AgentOrchestratorService implements ChatService {
         return null;
     }
 
-    private ChatResponse handleItineraryModification(String sessionId, String message, SessionState currentState) {
+    private ChatResponse handleItineraryModification(String sessionId, String message, SessionState currentState,IntentRoutingDecision route) {
         TripRequirement extracted = extractWithContext(message, currentState);
         TripRequirement merged = mergeRequirement(currentState.requirement(), extracted);
 
         List<RagRetrievalResult> results = List.of();
-        //前端
         List<SourceReferenceDto> sources = List.of();
         String modifierMessage = message;
 
-        if (ragRetrievalDecider.shouldRetrieveForModification(message, merged)) {
-            results = ragRetrievalService.retrieve(new RagQuery(message, merged.destination(), null, 3));
-            //知识库的来源发给前端
+        //如果需要修改流程
+        if (route.requiresRetrieval()) {
+            String city = StringUtils.hasText(route.city()) ? route.city() : merged.destination();
+
+            results = ragRetrievalService.retrieve(new RagQuery(message, city, route.topic(), 3));
             sources = ragContextAssembler.toSources(results);
 
-            //提示词注入，知识库注入
             String ragContext = ragContextAssembler.buildContext(results);
             if (StringUtils.hasText(ragContext)) {
                 modifierMessage = message + "\n\n补充参考知识：\n" + ragContext;
