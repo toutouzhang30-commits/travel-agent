@@ -5,7 +5,9 @@ import com.xingwuyou.travelagent.chat.dto.*;
 import com.xingwuyou.travelagent.chat.model.Itinerary;
 import com.xingwuyou.travelagent.chat.rag.retrieval.*;
 import com.xingwuyou.travelagent.chat.rag.retrieval.dto.RagQuery;
+import com.xingwuyou.travelagent.chat.rag.retrieval.dto.RagRetrievalFlowResult;
 import com.xingwuyou.travelagent.chat.rag.retrieval.dto.RagRetrievalResult;
+import com.xingwuyou.travelagent.chat.rag.retrieval.service.RagRetrievalFlowService;
 import com.xingwuyou.travelagent.chat.session.SessionState;
 import com.xingwuyou.travelagent.chat.session.SessionStateStore;
 import com.xingwuyou.travelagent.chat.tool.weather.WeatherTool;
@@ -48,8 +50,8 @@ public class AgentOrchestratorService implements ChatService {
     private final WeatherTool weatherTool;
     private final ToolAnswerGenerator toolAnswerGenerator;
     private final IntentRoutingService intentRoutingService;
-    private final HybridRagRetrievalService hybridRagRetrievalService;
-
+    //private final HybridRagRetrievalService hybridRagRetrievalService;
+    private final RagRetrievalFlowService ragRetrievalFlowService;
 
 
 
@@ -68,8 +70,9 @@ public class AgentOrchestratorService implements ChatService {
             WeatherTool weatherTool,
             ToolAnswerGenerator toolAnswerGenerator,
             IntentRoutingService intentRoutingService,
-            HybridRagRetrievalService hybridRagRetrievalService
-            ) {
+            //HybridRagRetrievalService hybridRagRetrievalService
+            RagRetrievalFlowService ragRetrievalFlowService
+    ) {
         this.extractor = extractor;
         this.checker = checker;
         this.generator = generator;
@@ -84,7 +87,8 @@ public class AgentOrchestratorService implements ChatService {
         this.weatherTool = weatherTool;
         this.toolAnswerGenerator = toolAnswerGenerator;
         this.intentRoutingService = intentRoutingService;
-        this.hybridRagRetrievalService = hybridRagRetrievalService;
+        //this.hybridRagRetrievalService = hybridRagRetrievalService;
+        this.ragRetrievalFlowService = ragRetrievalFlowService;
     }
 
     //为什么需要新增这个内部record?
@@ -112,24 +116,24 @@ public class AgentOrchestratorService implements ChatService {
 
     //目前走什么路径使用这个方法进行判断
     private ChatResponse orchestrateByRoute(String sessionId, String message, SessionState currentState, IntentRoutingDecision route) {
-        if (route == null || route.action() == null) {
+        if (route == null || route.action() == null || route.outputMode() == null) {
             return buildRoutingFailedResponse(sessionId);
         }
 
-        return switch (route.action()) {
-            case WEATHER_TOOL -> executeWeatherToolFlow(sessionId, message, currentState).response();
-
-            case PRICING_TOOL, MAPS_TOOL -> buildRealtimeUnsupportedResponse(sessionId);
-
-            case KNOWLEDGE_QA -> handleKnowledgeAnswer(sessionId, message, currentState, route);
-
-            case MODIFY_ITINERARY -> handleItineraryModification(sessionId, message, currentState, route);
-
-            case COLLECT_REQUIREMENT, GENERATE_ITINERARY -> handleRequirementAndGeneration(sessionId, message, currentState, route);
-
+        return switch (route.outputMode()) {
+            case TOOL_RESULT -> switch (route.action()) {
+                case WEATHER_TOOL -> executeWeatherToolFlow(sessionId, message, currentState).response();
+                case PRICING_TOOL, MAPS_TOOL -> buildRealtimeUnsupportedResponse(sessionId);
+                default -> buildRoutingFailedResponse(sessionId);
+            };
+            case KNOWLEDGE_ANSWER -> handleKnowledgeAnswer(sessionId, message, currentState, route);
+            case ITINERARY -> handleRequirementAndGeneration(sessionId, message, currentState, route);
+            case ITINERARY_UPDATE -> handleItineraryModification(sessionId, message, currentState, route);
+            case FOLLOW_UP -> handleRequirementAndGeneration(sessionId, message, currentState, route);
             case ROUTING_FAILED -> buildRoutingFailedResponse(sessionId);
         };
     }
+
 
 
 
@@ -337,15 +341,21 @@ public class AgentOrchestratorService implements ChatService {
         List<SourceReferenceDto> sources = List.of();
         String ragContext = "";
 
+        //换成知识库流service
         if (route.requiresRetrieval()) {
-            RagQuery query = new RagQuery(message, merged.destination(), route.topic(), 5);
-            HybridRagRetrievalResult ragResult = hybridRagRetrievalService.retrieve(query, route);
+            RagRetrievalFlowResult retrieval = ragRetrievalFlowService.retrieve(
+                    message,
+                    route,
+                    merged.destination(),
+                    5
+            );
 
-            if (ragResult.allowed()) {
-                sources = toRagSources(ragResult.documents());
-                ragContext = ragResult.context();
+            if (retrieval.allowed()) {
+                sources = retrieval.sources();
+                ragContext = retrieval.context();
             }
         }
+
 
 
 
@@ -406,16 +416,23 @@ public class AgentOrchestratorService implements ChatService {
 
         // 先只按 city 过滤，不按 route.topic 精确过滤。
         // route.topic 是模型生成的自然语义标签，不一定等于入库 metadata 的 category。
-        RagQuery query = new RagQuery(message, city, null, 5);
-        HybridRagRetrievalResult ragResult = hybridRagRetrievalService.retrieve(query, route);
+        String fallbackCity = currentState.requirement() == null
+                ? null
+                : currentState.requirement().destination();
 
-        if (!ragResult.allowed()) {
-            return buildRagRejectedResponse(sessionId, ragResult);
+        RagRetrievalFlowResult retrieval = ragRetrievalFlowService.retrieve(
+                message,
+                route,
+                fallbackCity,
+                5
+        );
+
+        if (!retrieval.allowed()) {
+            return buildRagRejectedResponse(sessionId, retrieval.rejectionReason());
         }
 
-        //从知识库获取的知识注入上下文
-        List<SourceReferenceDto> sources = toRagSources(ragResult.documents());
-        String answer = ragAnswerGenerator.answer(message, ragResult.context());
+        String answer = ragAnswerGenerator.answer(message, retrieval.context());
+
 
         return new ChatResponse(
                 sessionId,
@@ -425,7 +442,7 @@ public class AgentOrchestratorService implements ChatService {
                 List.of(),
                 null,
                 null,
-                sources
+                retrieval.sources()
         );
     }
 
@@ -442,17 +459,22 @@ public class AgentOrchestratorService implements ChatService {
         if (route.requiresRetrieval()) {
             String city = StringUtils.hasText(route.city()) ? route.city() : merged.destination();
 
-            RagQuery query = new RagQuery(message, city, route.topic(), 5);
-            HybridRagRetrievalResult ragResult = hybridRagRetrievalService.retrieve(query, route);
+            RagRetrievalFlowResult retrieval = ragRetrievalFlowService.retrieve(
+                    message,
+                    route,
+                    city,
+                    5
+            );
 
-            if (ragResult.allowed()) {
-                sources = toRagSources(ragResult.documents());
+            if (retrieval.allowed()) {
+                sources = retrieval.sources();
 
-                if (StringUtils.hasText(ragResult.context())) {
-                    modifierMessage = message + "\n\n补充参考知识：\n" + ragResult.context();
+                if (StringUtils.hasText(retrieval.context())) {
+                    modifierMessage = message + "\n\n补充参考知识：\n" + retrieval.context();
                 }
             }
         }
+
 
 
         Itinerary updatedItinerary = modifier.modify(
@@ -473,40 +495,13 @@ public class AgentOrchestratorService implements ChatService {
         );
     }
 
-    private List<SourceReferenceDto> toRagSources(List<RagScoredDocument> documents) {
-        if (documents == null || documents.isEmpty()) {
-            return List.of();
-        }
 
-        return documents.stream()
-                .map(document -> SourceReferenceDto.rag(
-                        document.city(),
-                        document.topic(),
-                        document.sourceName(),
-                        document.sourceUrl(),
-                        document.verifiedAt(),
-                        (document.recallSources() == null ? Set.<RagRecallSource>of() : document.recallSources()).stream()
-                                .map(Enum::name)
-                                .toList(),
-                        document.scoreSource(),
-                        document.score(),
-                        document.vectorScore(),
-                        document.lexicalScore(),
-                        document.rerankScore()
-                ))
-                .toList();
-    }
-
-    private ChatResponse buildRagRejectedResponse(
-            String sessionId,
-            HybridRagRetrievalResult ragResult
-    ) {
+    private ChatResponse buildRagRejectedResponse(String sessionId, String reason) {
         return new ChatResponse(
                 sessionId,
                 ChatResponseType.KNOWLEDGE_ANSWER,
-                "我检索了知识库，但当前结果不足以作为可靠依据：" +
-                        ragResult.gateDecision().reason() +
-                        "。你可以补充城市、天数或具体玩法主题，我再帮你查得更准。",
+                "我检索了知识库，但当前结果不足以作为可靠依据：" + reason
+                        + "。你可以补充城市、天数或具体玩法主题，我再帮你查得更准。",
                 null,
                 List.of(),
                 null,
@@ -514,6 +509,7 @@ public class AgentOrchestratorService implements ChatService {
                 List.of()
         );
     }
+
 
 
     private TripRequirement extractWithContext(String message, SessionState currentState) {

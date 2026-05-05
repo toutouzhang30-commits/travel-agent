@@ -399,5 +399,58 @@ Reflection loop 不一定需要单独新事件类型，第一阶段可以通过 
 
 ---
 
-## 11. 一句话架构策略
-系统以 Spring MVC + SSE 网页聊天室为入口，已完成结构化路由前置和受控编排闭环；下一步以 Phase 3B 的 Lucene BM25、DashScope Reranker、RagEvidenceJudge、上下文注入和来源治理为核心，先跑通完整候选治理链路；RRF、score fusion、系统性评估调参和网页采集治理放到链路稳定之后，再前移 Working Memory 与 Reflection loop。
+## 11. 当前阶段调整：RAG 阶段性收口与 Maps / Pricing 工具接入
+当前 RAG 能力先停在“可用于网页问答验证、来源展示和基础候选解释”的阶段性节点，不在本轮继续推进 RRF、score fusion、网页采集治理和系统性评估调参。高级 RAG 仍保留为后续方向，但当前下一步优先转向 **Phase 4B：Maps / Pricing 工具接入**，把实时路线、距离、耗时、门票/价格类问题从 RAG 边界中拆出去。
+
+这个调整的原因是：
+- 天气、路线、票价都属于强时效或半时效信息，不应由静态 RAG 兜底。
+- WeatherTool 已经提供了可复用模板，Maps / Pricing 可以复用同一套 DTO、Extractor、Tool、AnswerGenerator、SSE 展示模式。
+- 工具层补齐后，RAG 的负样本边界会更清晰：路线、票价问题应进入工具层，而不是进入知识库回答。
+
+目标工具包结构：
+
+```text
+chat/
+  tool/
+    weather/                  # 已有天气工具模板
+    maps/
+      dto/
+      client/
+      MapsTool.java
+      MapsQueryExtractor.java
+      MapsAnswerGenerator.java
+    pricing/
+      dto/
+      client/
+      PricingTool.java
+      PricingQueryExtractor.java
+      PricingAnswerGenerator.java
+```
+
+编排目标链路：
+
+```text
+IntentRoutingService
+  -> AgentOrchestratorService
+  -> executeMapsToolFlow / executePricingToolFlow
+  -> tool_call SSE
+  -> MapsTool / PricingTool
+  -> tool_result SSE
+  -> final answer
+```
+
+短期可以先在 `AgentOrchestratorService` 中参考 WeatherTool 增加 `executeMapsToolFlow` 和 `executePricingToolFlow`。当 Weather / Maps / Pricing 三者重复明显后，再抽统一 `ToolFlowExecutor`，不要一开始为了抽象而重构过大。
+
+验收问题：
+
+```text
+从西湖到灵隐寺大概要多久？ -> MAPS_TOOL -> 工具结果或明确不可用
+北京南站到故宫怎么走更方便？ -> MAPS_TOOL -> 工具结果或明确不可用
+上海迪士尼今天门票多少钱？ -> PRICING_TOOL -> 工具结果或明确不可用
+北京故宫门票大概多少钱？ -> PRICING_TOOL -> 工具结果或明确不可用
+杭州雨天怎么玩？ -> KNOWLEDGE_QA / RAG，不走 WeatherTool 或 MapsTool
+北京第一次去怎么安排更顺？ -> KNOWLEDGE_QA / RAG，不走 MapsTool
+```
+
+## 12. 一句话架构策略
+系统以 Spring MVC + SSE 网页聊天室为入口，已完成结构化路由前置、RAG 最小闭环和 WeatherTool 受控工具展示；当前 RAG 先阶段性收口，下一步优先扩展 Maps / Pricing 等 Spring AI `@Tool` 实时工具，把路线、距离、耗时、票价等问题从静态知识回答边界中拆出去，再回到高级 RAG、Working Memory 与 Reflection loop 的深化。

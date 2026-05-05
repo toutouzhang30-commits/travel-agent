@@ -468,6 +468,117 @@ Reranker 第一候选为 DashScope `gte-rerank-v2`。
 - 每个工具都能在 SSE 中展示 `tool_call` / `tool_result`。
 - MCP 可作为后续外部工具协议扩展选项，但当前不写成必须落地。
 
+### 当前实施优先级
+当前 RAG 先阶段性收口，不继续在本轮扩展 RRF、score fusion、网页采集治理和系统性评估调参。下一步优先推进 Phase 4B，顺序为：
+
+```text
+MapsTool 最小闭环
+  -> PricingTool 最小闭环
+  -> Orchestrator 接入 tool_call / tool_result
+  -> 前端来源区和工具区验收
+  -> 再回到高级 RAG 深化
+```
+
+### Phase 4B-1：MapsTool 最小闭环
+目标：处理路线、距离、交通耗时类问题，避免这类问题误入 RAG。
+
+新增包结构：
+
+```text
+src/main/java/com/xingwuyou/travelagent/chat/tool/maps/
+  dto/
+    MapsToolRequest.java
+    MapsToolResponse.java
+  client/
+    MapsClient.java
+    MapsClientResponse.java
+  MapsQueryExtractor.java
+  MapsTool.java
+  MapsAnswerGenerator.java
+```
+
+具体职责：
+- `MapsToolRequest`：结构化输入，至少包含 `origin`、`destination`、`city`、`travelMode`、`departureTimeText`。
+- `MapsToolResponse`：结构化输出，至少包含 `success`、`origin`、`destination`、`distanceText`、`durationText`、`routeSummary`、`source`、`updatedAt`、`errorMessage`。
+- `MapsQueryExtractor`：使用 Spring AI `.entity(MapsToolRequest.class)` 从自然语言抽取参数，不使用关键词、正则或 `String.contains()`。
+- `MapsClient`：封装真实地图 API 或临时 mock/fallback，负责 API key 缺失、超时、接口失败等硬边界。
+- `MapsTool`：受控工具执行层，调用 `MapsClient`，输出 `MapsToolResponse`。
+- `MapsAnswerGenerator`：把 `MapsToolResponse` 转成用户回答；失败时必须明确说明“不确定/暂不可用”，不能编造耗时。
+
+修改点：
+- `IntentRoutingService`：补充 `MAPS_TOOL` 的结构化路由说明和示例，例如“从西湖到灵隐寺大概要多久？”、“北京南站到故宫怎么走更方便？”。
+- `AgentOrchestratorService`：参考 `executeWeatherToolFlow` 新增 `executeMapsToolFlow`，并在 `TOOL_RESULT` / `MAPS_TOOL` 分支中调用。
+- `AgentEvent` / `ToolCallPayloadDto` / `ToolResultPayloadDto`：优先复用现有结构；如字段不足，只做最小补充。
+- 前端页面：复用已有工具状态展示，不新建复杂视图。
+
+验收问题：
+
+```text
+从西湖到灵隐寺大概要多久？ -> MAPS_TOOL
+北京南站到故宫怎么走更方便？ -> MAPS_TOOL
+上海外滩到武康路怎么去？ -> MAPS_TOOL
+杭州雨天怎么玩？ -> KNOWLEDGE_QA，不走 MAPS_TOOL
+```
+
+### Phase 4B-2：PricingTool 最小闭环
+目标：处理门票、价格、票务类问题，避免 RAG 编造实时或半实时价格。
+
+新增包结构：
+
+```text
+src/main/java/com/xingwuyou/travelagent/chat/tool/pricing/
+  dto/
+    PricingToolRequest.java
+    PricingToolResponse.java
+  client/
+    PricingClient.java
+    PricingClientResponse.java
+  PricingQueryExtractor.java
+  PricingTool.java
+  PricingAnswerGenerator.java
+```
+
+具体职责：
+- `PricingToolRequest`：结构化输入，至少包含 `city`、`poiName`、`ticketType`、`visitDateText`、`travelerType`。
+- `PricingToolResponse`：结构化输出，至少包含 `success`、`poiName`、`priceText`、`currency`、`ticketType`、`source`、`updatedAt`、`errorMessage`。
+- `PricingQueryExtractor`：使用 Spring AI `.entity(PricingToolRequest.class)` 抽取票价查询参数。
+- `PricingClient`：封装真实票价 API 或临时不可用 fallback，负责来源、更新时间和失败状态。
+- `PricingTool`：受控工具执行层，调用 `PricingClient`，输出 `PricingToolResponse`。
+- `PricingAnswerGenerator`：生成最终回答；如果没有真实来源，必须说清楚暂不可可靠回答。
+
+修改点：
+- `IntentRoutingService`：补充 `PRICING_TOOL` 路由示例，例如“上海迪士尼今天门票多少钱？”、“北京故宫门票大概多少钱？”。
+- `AgentOrchestratorService`：参考 `executeWeatherToolFlow` 新增 `executePricingToolFlow`，并在 `TOOL_RESULT` / `PRICING_TOOL` 分支中调用。
+- RAG 负样本：保留“门票多少钱/今天价格/余票”类问题，确保不会进入 RAG。
+
+验收问题：
+
+```text
+上海迪士尼今天门票多少钱？ -> PRICING_TOOL
+北京故宫门票大概多少钱？ -> PRICING_TOOL
+杭州灵隐寺门票多少钱？ -> PRICING_TOOL
+上海周末两天偏拍照打卡怎么安排？ -> KNOWLEDGE_QA，不走 PRICING_TOOL
+```
+
+### Phase 4B-3：工具编排与 SSE 对齐
+目标：Maps / Pricing 的用户可见过程与 WeatherTool 一致。
+
+修改点：
+- `AgentOrchestratorService`：
+  - `MAPS_TOOL`：发送“正在准备路线工具参数”状态，再发 `tool_call`，再发 `tool_result`。
+  - `PRICING_TOOL`：发送“正在准备票价工具参数”状态，再发 `tool_call`，再发 `tool_result`。
+  - 工具失败时返回 `KNOWLEDGE_ANSWER` 类型的解释性回答，但内容必须明确工具失败或暂不可用。
+- 前端：
+  - 继续展示 `tool_call` / `tool_result`。
+  - 来源区可显示 tool source；如果 source 为空，不展示为可靠来源。
+
+### Phase 4B-4：回归测试与手工验收
+必须覆盖：
+- 路由测试：Maps / Pricing 问题进入对应 action。
+- 工具参数抽取测试：相对时间、地点、票种能进入 DTO。
+- 失败降级测试：API key 缺失或 client 失败时，最终回答不假装成功。
+- RAG 边界测试：路线、票价问题不进入 RAG；攻略型问题仍进入知识回答。
+
 ---
 
 ## Phase 5：Agent 编排 + Working Memory + Reflection
@@ -550,20 +661,19 @@ Phase 7 不是 Working Memory 的起点，也不替代短期上下文压缩。Ph
 ## 6. 当前优先级
 当前不是所有能力同时推进。优先级如下：
 
-1. **Phase 3B-A：RAG 评估基准与负样本**：先建立 JSONL 评估集、指标和报告输出，避免凭感觉调召回。
-2. **Phase 3B-0：数据安全与评估前置**：测试不触发入库，入库失败不清旧 active run，manifest 与向量表真实数据一致。
-3. **Phase 3B-2：RagRetrievalGate 拒答阈值**：用底线阈值阻止低质量、错城市、实时问题或负样本进入最终 prompt。
-4. **Phase 3B-4 ~ 3B-7：BM25 + Reranker + RagEvidenceJudge**：先补 Lucene BM25、candidate union / dedup、DashScope Reranker 和证据裁判，再注入上下文。
-5. **Phase 3B 后置增强**：RRF、score fusion、Postgres FTS、系统性评估调参和网页采集治理放到主链路稳定之后。
+1. **Phase 4B-1：MapsTool 最小闭环**：先接路线、距离、交通耗时类工具，避免路线问题误入 RAG。
+2. **Phase 4B-2：PricingTool 最小闭环**：再接门票、价格、票务类工具，避免 RAG 编造实时或半实时价格。
+3. **Phase 4B-3：工具编排与 SSE 对齐**：Maps / Pricing 必须像 WeatherTool 一样展示 `tool_call` / `tool_result`。
+4. **Phase 4B-4：回归测试与手工验收**：覆盖路由、参数抽取、工具失败降级和 RAG 边界。
+5. **Phase 3B 后续深化**：RAG 评估、BM25、Reranker、RagEvidenceJudge、RRF、score fusion 和网页采集治理放到工具边界补齐后继续推进。
 6. **Working Memory 前移**：先内存态，优先补齐路由上下文。
 7. **Reflection 最小闭环**：最多一次局部修正。
-8. **更多工具扩展**：先 Spring AI `@Tool`，MCP 仅作为后续可选扩展。
 
 原因：
-- RAG 入库幂等、检索收口、结构化路由和受控编排已经完成，当前主风险已经切换到 RAG 质量、拒答边界和评估可见性。
-- 没有评估集和负样本，高级 RAG 的召回、重排和拒答阈值无法被稳定验证。
-- 没有 RagRetrievalGate，RAG 仍可能把低质量来源、错城市来源或实时问题塞进最终 prompt。
-- 当前 Phase 3B 主线先推进 Lucene BM25、DashScope Reranker 和 RagEvidenceJudge；RRF、score fusion 和系统性评估调参放到链路稳定之后。
+- RAG 当前先阶段性收口，已经足够支持网页问答验证、来源展示和基础边界观察。
+- 路线、距离、耗时、票价、门票属于实时或半实时问题，应优先进入工具层，不应继续由 RAG 兜底。
+- WeatherTool 已经形成可复用模板，Maps / Pricing 可以沿用同一套受控 `@Tool`、DTO、Extractor、AnswerGenerator 和 SSE 模式。
+- 工具边界补齐后，RAG 的负样本和拒答边界会更清晰，再继续推进高级 RAG 更稳。
 - 没有 Working Memory，路由、工具参数补全、修改和 Reflection 都缺上下文。
 - 没有 Reflection，系统仍像单轮输出器，不像 Agent。
 
@@ -609,4 +719,4 @@ Phase 7 不是 Working Memory 的起点，也不替代短期上下文压缩。Ph
 ---
 
 ## 10. 一句话执行策略
-当前项目已经完成 Phase 4A 结构化路由前置和受控编排闭环，接下来应优先推进 Phase 3B 高级 RAG：先评估与负样本，再多路召回、重排、拒答阈值和上下文压缩，随后前移 Working Memory 与 Reflection，把现有能跑的聊天骨架逐步收敛成真正的旅游 Agent。
+当前项目已经完成 Phase 4A 结构化路由前置、RAG 最小闭环和 WeatherTool 受控工具展示。当前 RAG 先阶段性收口，下一步优先推进 Phase 4B：先接 MapsTool，再接 PricingTool，并让路线、耗时、票价问题稳定走工具层；之后再回到高级 RAG、Working Memory 与 Reflection，把现有能跑的聊天骨架逐步收敛成真正的旅游 Agent。

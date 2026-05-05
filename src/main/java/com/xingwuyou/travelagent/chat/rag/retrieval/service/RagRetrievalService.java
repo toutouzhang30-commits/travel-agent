@@ -1,4 +1,4 @@
-package com.xingwuyou.travelagent.chat.rag.retrieval;
+package com.xingwuyou.travelagent.chat.rag.retrieval.service;
 
 import com.xingwuyou.travelagent.chat.rag.ingest.RagIngestionManifestRepository;
 import com.xingwuyou.travelagent.chat.rag.ingest.RagIngestionProperties;

@@ -36,19 +36,47 @@
 ---
 
 ## 当前下一步
-### Phase 3B：Lucene BM25 + DashScope Reranker + RagEvidenceJudge
-- 当前 RAG 仍是最小闭环，不代表 RAG 架构成熟。
-- 当前主线调整为：`Vector Recall + BM25 Recall -> candidate union / dedup -> DashScope Reranker -> RagEvidenceJudge -> context injection -> answer`。
-- 下一步优先补齐 `LuceneBm25RagRecallService`，必须包含 `search(RagQuery)` 与 `rebuildIndex()` 两个入口。
-- BM25 第一版采用 Lucene 内存索引，按 manifest active run 绑定；active run、chunk count 或 content hash 变化时触发重建。
-- DashScope Reranker 仍进入主链路，负责候选排序；失败时 fallback 到合并候选原始排序。
-- `RagEvidenceJudge` 作为证据充分性判断层，采用子代理式裁判，但对外封装为受控 Spring Service。
-- `RagEvidenceJudge` 批处理策略：每批最多 5 条 snippet、每批约 3000 字符上限、最多 3 批、停止于首个 `evidenceEnough=true` 的批次。
-- 当前不做 RRF / score fusion / 系统性评估调参；这些放到 BM25 + Reranker + Judge 链路稳定之后。
-- 负样本应覆盖实时天气、票价、路线、非试点城市和越界问题，防止 RAG 越权回答。
-- 新增 `RagRetrievalGate` 作为拒答机制底线：低分、无来源、错城市、实时问题误入 RAG 时拒绝进入最终 prompt。
-- Phase 4A 主链路已完成，Phase 3B 现在可以作为当前重点推进。
-- 不能把运行时临时爬网页当成直接回答用户的主路径。
+### Phase 4B：Maps / Pricing 工具接入
+- 当前 RAG 先阶段性收口，用于网页问答验证、来源展示和基础边界观察；这不代表高级 RAG 已完成。
+- 下一步优先补齐实时 / 半实时工具边界，先接 MapsTool，再接 PricingTool。
+- MapsTool 负责路线、距离、交通耗时类问题，例如“从西湖到灵隐寺大概要多久？”。
+- PricingTool 负责门票、价格、票务类问题，例如“上海迪士尼今天门票多少钱？”。
+- Maps / Pricing 都复用 WeatherTool 的模式：结构化参数抽取 DTO、受控 Tool 执行、AnswerGenerator、`tool_call` / `tool_result` SSE 展示。
+- 工具失败时必须明确说明不可用或不确定，不能编造路线耗时或票价。
+- RAG 后续仍会继续推进 BM25、DashScope Reranker、RagEvidenceJudge、RRF / score fusion 和评估报告，但放到 Maps / Pricing 工具边界补齐之后。
+
+### Phase 4B 具体实施步骤
+1. 新增 `chat.tool.maps` 包：
+   - `dto/MapsToolRequest.java`
+   - `dto/MapsToolResponse.java`
+   - `client/MapsClient.java`
+   - `client/MapsClientResponse.java`
+   - `MapsQueryExtractor.java`
+   - `MapsTool.java`
+   - `MapsAnswerGenerator.java`
+2. 新增 `chat.tool.pricing` 包：
+   - `dto/PricingToolRequest.java`
+   - `dto/PricingToolResponse.java`
+   - `client/PricingClient.java`
+   - `client/PricingClientResponse.java`
+   - `PricingQueryExtractor.java`
+   - `PricingTool.java`
+   - `PricingAnswerGenerator.java`
+3. 修改 `IntentRoutingService`：
+   - 补充 `MAPS_TOOL` 示例：路线、距离、交通耗时。
+   - 补充 `PRICING_TOOL` 示例：门票、票价、余票、价格。
+4. 修改 `AgentOrchestratorService`：
+   - 参考 `executeWeatherToolFlow` 增加 `executeMapsToolFlow`。
+   - 参考 `executeWeatherToolFlow` 增加 `executePricingToolFlow`。
+   - 在工具分支中将 `MAPS_TOOL` / `PRICING_TOOL` 从“不支持兜底”切换为真实工具调用。
+5. 修改前端工具展示：
+   - 复用已有 `tool_call` / `tool_result` 展示。
+   - 工具 source 存在时进入来源区；source 为空时不展示为可靠来源。
+6. 补充回归测试：
+   - 路由测试。
+   - 参数抽取测试。
+   - 工具失败降级测试。
+   - RAG 边界测试。
 
 ### Phase 5 前置设计：Working Memory + Reflection
 - Working Memory 不能等到 Phase 7 才开始，短期先走内存态。
@@ -62,9 +90,9 @@
 - Working Memory 前移。
 - Working Memory 上下文压缩与驱逐机制。
 - Reflection 最小闭环。
+- Phase 4B Maps / Pricing 工具真实接入。
 - Phase 3B 高级 RAG：Lucene BM25、`rebuildIndex()`、DashScope Reranker、RagEvidenceJudge、上下文注入、来源治理和拒答边界。
 - Phase 3B 后置项：RRF、score fusion、系统性评估指标调优、Postgres FTS 探测和网页采集治理。
-- Maps / Pricing 等更多工具。
 - MySQL 正式持久化与会话版本化。
 - MCP 仅作为后续可选外部工具协议扩展，目前不作为当前必须落地项。
 
@@ -83,4 +111,4 @@
 ---
 
 ## 当前一句话结论
-当前项目已经完成“旅游聊天骨架 + Web 页 + RAG 最小闭环 + RAG Manifest 幂等入库 + RAG 检索收口 + Phase 4A 结构化路由与受控编排闭环”。下一步推进 **Lucene BM25 + DashScope Reranker + RagEvidenceJudge**：先补 BM25 召回与 `rebuildIndex()`，再让候选经 reranker 排序和 judge 裁判后注入上下文；RRF、score fusion 和系统性评估调参放到链路稳定之后。
+当前项目已经完成“旅游聊天骨架 + Web 页 + RAG 最小闭环 + RAG Manifest 幂等入库 + RAG 检索收口 + Phase 4A 结构化路由与受控编排闭环 + WeatherTool 受控工具展示”。当前 RAG 先阶段性收口，下一步推进 **Phase 4B Maps / Pricing 工具接入**：先接路线、距离、交通耗时，再接门票、票价、票务查询，并确保工具失败时明确不确定性；随后再回到 BM25、Reranker、RagEvidenceJudge 等高级 RAG 深化。

@@ -1,6 +1,5 @@
 package com.xingwuyou.travelagent.chat.rag.retrieval.hybrid;
 
-import com.xingwuyou.travelagent.chat.rag.retrieval.RagRetrievalService;
 import com.xingwuyou.travelagent.chat.rag.retrieval.dto.RagQuery;
 import com.xingwuyou.travelagent.chat.rag.retrieval.dto.RagRetrievalResult;
 import com.xingwuyou.travelagent.chat.rag.retrieval.gate.RagGateDecision;
