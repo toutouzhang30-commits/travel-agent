@@ -1,0 +1,26 @@
+{"id":"hz_pos_001","caseType":"POSITIVE","question":"杭州雨天怎么玩？","city":"杭州","expectedAction":"RETRIEVE","expectedTopics":["雨天","室内","季节性与天气建议"],"expectedKeywords":["雨天","西湖","雨湖","咖啡馆"],"expectedSourceNames":[]}
+{"id":"hz_pos_002","caseType":"POSITIVE","question":"第一次去杭州，西湖和灵隐怎么安排更顺？","city":"杭州","expectedAction":"RETRIEVE","expectedTopics":["重点区域介绍","常见旅游节奏建议"],"expectedKeywords":["西湖","灵隐","北线","分段游玩"],"expectedSourceNames":[]}
+{"id":"hz_pos_003","caseType":"POSITIVE","question":"杭州三天想轻松一点怎么玩？","city":"杭州","expectedAction":"RETRIEVE","expectedTopics":["常见旅游节奏建议","慢节奏"],"expectedKeywords":["3至4日游","西溪湿地","龙井村","慢节奏"],"expectedSourceNames":[]}
+{"id":"hz_pos_004","caseType":"POSITIVE","question":"杭州秋天适合安排什么玩法？","city":"杭州","expectedAction":"RETRIEVE","expectedTopics":["季节性与天气建议"],"expectedKeywords":["秋季","桂花","西湖骑行","满觉陇"],"expectedSourceNames":[]}
+{"id":"bj_pos_001","caseType":"POSITIVE","question":"北京第一次去怎么安排更顺？","city":"北京","expectedAction":"RETRIEVE","expectedTopics":["行程规划","重点区域"],"expectedKeywords":["故宫","天安门","胡同","长城"],"expectedSourceNames":[]}
+{"id":"bj_pos_002","caseType":"POSITIVE","question":"北京冬天旅游需要注意什么？","city":"北京","expectedAction":"RETRIEVE","expectedTopics":["季节性与天气建议"],"expectedKeywords":["冬季","干冷","西北风","保暖"],"expectedSourceNames":[]}
+{"id":"bj_pos_003","caseType":"POSITIVE","question":"北京想看人文景点应该怎么选区域？","city":"北京","expectedAction":"RETRIEVE","expectedTopics":["人文","重点区域"],"expectedKeywords":["故宫","胡同","中轴线","人文"],"expectedSourceNames":[]}
+{"id":"bj_pos_004","caseType":"POSITIVE","question":"北京亲子游适合安排哪些类型的地方？","city":"北京","expectedAction":"RETRIEVE","expectedTopics":["亲子","区域玩法"],"expectedKeywords":["博物馆","公园","长城","节奏"],"expectedSourceNames":[]}
+{"id":"sh_pos_001","caseType":"POSITIVE","question":"上海拍照打卡适合住哪里？","city":"上海","expectedAction":"RETRIEVE","expectedTopics":["拍照打卡","住宿区域"],"expectedKeywords":["外滩","陆家嘴","武康路","梧桐区"],"expectedSourceNames":[]}
+{"id":"sh_pos_002","caseType":"POSITIVE","question":"上海周末两天怎么安排比较经典？","city":"上海","expectedAction":"RETRIEVE","expectedTopics":["行程规划","经典游"],"expectedKeywords":["陆家嘴","外滩","武康路","Citywalk"],"expectedSourceNames":[]}
+{"id":"sh_pos_003","caseType":"POSITIVE","question":"上海夏天太热，有哪些室内玩法？","city":"上海","expectedAction":"RETRIEVE","expectedTopics":["季节性与天气建议","室内活动"],"expectedKeywords":["夏季","高温高湿","美术馆","博物馆"],"expectedSourceNames":[]}
+{"id":"sh_pos_004","caseType":"POSITIVE","question":"上海适合 citywalk 的区域有哪些？","city":"上海","expectedAction":"RETRIEVE","expectedTopics":["Citywalk","重点区域"],"expectedKeywords":["武康路","安福路","愚园路","梧桐区"],"expectedSourceNames":[]}
+{"id":"tool_neg_001","caseType":"NEGATIVE","question":"杭州明天会下雨吗？","city":"杭州","expectedAction":"TOOL_REQUIRED","expectedTopics":["天气"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"tool_neg_002","caseType":"NEGATIVE","question":"上海迪士尼今天门票多少钱？","city":"上海","expectedAction":"TOOL_REQUIRED","expectedTopics":["票价"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"tool_neg_003","caseType":"NEGATIVE","question":"从西湖到灵隐寺现在打车要多久？","city":"杭州","expectedAction":"TOOL_REQUIRED","expectedTopics":["路线","实时交通"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"tool_neg_004","caseType":"NEGATIVE","question":"北京故宫今天还剩多少张票？","city":"北京","expectedAction":"TOOL_REQUIRED","expectedTopics":["票务","实时余票"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"unsupported_neg_001","caseType":"NEGATIVE","question":"成都三天怎么玩？","city":"成都","expectedAction":"UNSUPPORTED","expectedTopics":["非试点城市"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"unsupported_neg_002","caseType":"NEGATIVE","question":"厦门周末两天怎么安排？","city":"厦门","expectedAction":"UNSUPPORTED","expectedTopics":["非试点城市"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"other_neg_001","caseType":"NEGATIVE","question":"帮我写一份 Java 简历","city":null,"expectedAction":"UNSUPPORTED","expectedTopics":["越界问题"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"other_neg_002","caseType":"NEGATIVE","question":"帮我分析一下股票明天会不会涨","city":null,"expectedAction":"UNSUPPORTED","expectedTopics":["越界问题"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"rag_neg_001","caseType":"NEGATIVE","question":"北京有哪些适合深夜办公的小众咖啡馆？","city":"北京","expectedAction":"NO_RETRIEVAL","expectedTopics":["证据不足","小众咖啡馆"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"rag_neg_002","caseType":"NEGATIVE","question":"杭州有哪些新开的网红餐厅值得去？","city":"杭州","expectedAction":"NO_RETRIEVAL","expectedTopics":["证据不足","新开餐厅"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"rag_neg_003","caseType":"NEGATIVE","question":"上海今天有哪些临时展览可以看？","city":"上海","expectedAction":"NO_RETRIEVAL","expectedTopics":["实时活动","临时展览"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"rag_neg_004","caseType":"NEGATIVE","question":"北京最近新开的沉浸式演出有哪些？","city":"北京","expectedAction":"NO_RETRIEVAL","expectedTopics":["实时活动","新开演出"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"rag_neg_005","caseType":"NEGATIVE","question":"杭州本周末有哪些市集活动？","city":"杭州","expectedAction":"NO_RETRIEVAL","expectedTopics":["实时活动","周末市集"],"expectedKeywords":[],"expectedSourceNames":[]}
+{"id":"rag_neg_006","caseType":"NEGATIVE","question":"上海有哪些刚开业的酒店适合亲子住？","city":"上海","expectedAction":"NO_RETRIEVAL","expectedTopics":["证据不足","新开酒店"],"expectedKeywords":[],"expectedSourceNames":[]}

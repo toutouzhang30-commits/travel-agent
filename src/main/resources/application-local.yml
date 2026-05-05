@@ -21,3 +21,10 @@ travel:
       base-url: "https://restapi.amap.com"
       connect-timeout: 3000
       read-timeout: 5000
+  rag:
+    rerank:
+      enabled: true
+      # 将你的 sk- 开头的真实 Key 填在引号内
+      api-key: "sk-8b95f5fcf099492f92f5a25a59240d85"
+      model: "gte-rerank-v2"
+      top-n: 10

@@ -2,6 +2,7 @@ package com.xingwuyou.travelagent.chat.rag.retrieval;
 
 
 import com.xingwuyou.travelagent.chat.dto.SourceReferenceDto;
+import com.xingwuyou.travelagent.chat.rag.retrieval.dto.RagRetrievalResult;
 import org.springframework.stereotype.Component;
 
 import java.util.List;

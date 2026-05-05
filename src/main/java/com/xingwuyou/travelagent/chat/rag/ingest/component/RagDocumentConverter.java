@@ -1,7 +1,8 @@
-package com.xingwuyou.travelagent.chat.rag.ingest;
+package com.xingwuyou.travelagent.chat.rag.ingest.component;
 
 import com.xingwuyou.travelagent.chat.rag.document.RagDocumentMetadata;
 import com.xingwuyou.travelagent.chat.rag.document.RagKnowledgeDocument;
+import com.xingwuyou.travelagent.chat.rag.ingest.dto.RagRawDocument;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -13,11 +14,12 @@ import java.util.List;
 @Component
 public class RagDocumentConverter {
     //聚合搬运工
-    public List<RagKnowledgeDocument> convert(List<String> rawDocuments) {
+    public List<RagKnowledgeDocument> convert(List<RagRawDocument> rawDocuments) {
         return rawDocuments.stream()
-                .flatMap(raw -> convertSingle(raw).stream())
+                .flatMap(raw -> convertSingle(raw.content()).stream())
                 .toList();
     }
+
 
     //返回的（元数据+内容）的列表
     private List<RagKnowledgeDocument> convertSingle(String raw) {

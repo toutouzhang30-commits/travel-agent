@@ -61,10 +61,11 @@ public class WeatherToolService {
             int requestedDays = Math.max(1, request.days());
 
             if (fromIndex >= forecast.casts().size()) {
-                return failure(request, "高德天气没有返回对应日期的预报。");
+                fromIndex = 0;
             }
 
             int toIndex = Math.min(forecast.casts().size(), fromIndex + requestedDays);
+
 
             List<WeatherForecastDay> forecastDays = new ArrayList<>();
             for (int i = fromIndex; i < toIndex; i++) {

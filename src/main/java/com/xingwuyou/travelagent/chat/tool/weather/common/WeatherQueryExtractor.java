@@ -104,20 +104,19 @@ public class WeatherQueryExtractor {
         );
     }
 
-    private int normalizeDays(Integer dayOffset) {
+    private int normalizeDayOffset(Integer dayOffset) {
         if (dayOffset == null || dayOffset < 0) {
             return DEFAULT_DAY_OFFSET;
         }
         return dayOffset;
     }
 
-    private int normalizeDayOffset(Integer days) {
+    private int normalizeDays(Integer days) {
         if (days == null || days < 1) {
             return DEFAULT_DAYS;
         }
         return Math.min(days, MAX_DAYS);
     }
-
 
 
 }

@@ -1,5 +1,7 @@
 package com.xingwuyou.travelagent.chat.dto;
 
+import java.util.List;
+
 //返回给前端的来源信息
 public record SourceReferenceDto(
         String sourceType,
@@ -10,7 +12,13 @@ public record SourceReferenceDto(
         String verifiedAt,
         String effectiveAt,
         String summary,
-        String toolName
+        String toolName,
+        List<String> recallSources,
+        String scoreSource,
+        Double score,
+        Double vectorScore,
+        Double lexicalScore,
+        Double rerankScore
 ) {
 
     //数据库
@@ -30,7 +38,45 @@ public record SourceReferenceDto(
                 verifiedAt,
                 verifiedAt,
                 "知识库检索",
+                null,
+                List.of(),
+                null,
+                null,
+                null,
+                null,
                 null
+        );
+    }
+
+    public static SourceReferenceDto rag(
+            String city,
+            String topic,
+            String sourceName,
+            String sourceUrl,
+            String verifiedAt,
+            List<String> recallSources,
+            String scoreSource,
+            double score,
+            double vectorScore,
+            double lexicalScore,
+            double rerankScore
+    ) {
+        return new SourceReferenceDto(
+                "RAG",
+                city,
+                topic,
+                sourceName,
+                sourceUrl,
+                verifiedAt,
+                verifiedAt,
+                "知识库检索",
+                null,
+                recallSources == null ? List.of() : recallSources,
+                scoreSource,
+                score,
+                vectorScore,
+                lexicalScore,
+                rerankScore
         );
     }
 
@@ -52,7 +98,13 @@ public record SourceReferenceDto(
                 effectiveAt,
                 effectiveAt,
                 summary,
-                toolName
+                toolName,
+                List.of(),
+                null,
+                null,
+                null,
+                null,
+                null
         );
     }
 }

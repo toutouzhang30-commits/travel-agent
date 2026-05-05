@@ -1,6 +1,7 @@
-package com.xingwuyou.travelagent.chat.rag.ingest;
+package com.xingwuyou.travelagent.chat.rag;
 
 
+import com.xingwuyou.travelagent.chat.rag.ingest.service.RagIngestionService;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
@@ -17,4 +18,5 @@ public class RagBootstrapRunner implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         ragIngestionService.ingestAll();
     }
+
 }

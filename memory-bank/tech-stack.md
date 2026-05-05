@@ -42,13 +42,17 @@
 | AI 编排基础 | Spring AI | 结构化输出、模型调用、后续工具整合 | 已落地 |
 | 模型接入 | DeepSeek OpenAI 兼容 API | 当前主模型路径 | 已落地 |
 | 内部知识库 | Spring AI PgVector | 内部 RAG 知识检索 | 已完成最小闭环 |
-| RAG 入库幂等 | PostgreSQL manifest 表 + JdbcTemplate | 控制启动入库、重建和 active run | 当前稳定性补强 |
+| RAG 入库幂等 | PostgreSQL manifest 表 + JdbcTemplate | 控制启动入库、重建和 active run | 已落地基础能力 |
+| 向量真实评分 | PgVector distance / similarity + JdbcTemplate fallback | 替代固定兜底分，支撑可解释 gate | Phase 3B 后续 |
+| 中文词法召回 | Postgres FTS（`zhparser` / `pg_jieba`）优先，Lucene BM25 fallback | 补足语义召回漏召 | Phase 3B 后续 |
+| 多路融合 | RRF + Sigmoid / `score / (score + 10)` 平滑映射 | 融合 vector 与 lexical rank / score | Phase 3B 后续 |
+| 专业重排 | DashScope `gte-rerank-v2` | 对融合候选做专业 rerank | Phase 3B 后续 |
 | 网页治理采集 | RestClient + Jsoup | 受控获取和清洗公开网页知识 | 目标态，未完整落地 |
 | 外部证据能力 | 受控网页采集 / 后续可选 MCP search/browser | 为高级 RAG 补 freshness 与覆盖率 | Phase 3B 目标，MCP 未落地 |
 | 主工具层 | Spring AI `@Tool` | 实时能力主工具调用方式 | 当前主线 |
 | 后续工具协议 | MCP（可选） | 未来外部工具协议扩展 | 后续选项，当前非必须 |
 | 过渡工具底座 | 本地 service/client + 统一工具网关 | 承接天气等已存在能力，向 `@Tool` 主线过渡 | 部分已存在 |
-| Working Memory | 内存态 SessionState 扩展 | 支撑多轮路由、检索、工具、反思 | 现状偏薄，需升级 |
+| Working Memory | 内存态 SessionState 扩展 + 摘要对象 + TTL/容量限制 | 支撑多轮路由、检索、工具、反思 | 现状偏薄，需升级 |
 | Reflection | Java 规则 + LLM 结构化校验 | 有界自检与局部修正 | 目标态，未入主链路 |
 | 业务数据存储 | MySQL 8 | 会话、版本、来源快照等持久化 | 目标态，未进入主线 |
 | ORM | Spring Data JPA | 正式持久化阶段的数据访问 | 依赖已在项目中 |
@@ -110,6 +114,7 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - 使用配置化 `pipeline-version`、chunk 策略、metadata 字段、embedding model / dimensions 生成 `pipeline_hash`。
 - 只有 manifest 为 `COMPLETED` 且两个 hash 都一致时，才跳过启动入库。
 - 通过 `IN_PROGRESS / COMPLETED / FAILED` 状态和事务边界避免半完成入库被误认为成功。
+- PgVector 检索过滤当前 `active_run_id`，知识问答检索已完成 city 优先收口。
 
 #### B. 外部证据能力
 - 受控网页采集，以及后续可选 MCP search / browser 等能力
@@ -138,11 +143,15 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 
 因此技术栈必须支撑：
 - 内存态 Working Memory
+- 上下文摘要压缩
+- TTL / 容量限制 / 目的地切换清理
 - 结构化反思结果
 - 有界修正循环
 
 这里当前最合适的路线是：
 - 先用内存态 `SessionStateStore` 演进为 Working Memory 容器
+- 用摘要对象保存 RAG / Tool / Reflection 结果，不保存完整上下文
+- 用最近 5 轮对话和最近 5 次关键决策作为默认容量边界
 - Reflection 用 Java 规则 + LLM 结构化校验组合
 - 正式持久化延后到 MySQL 阶段
 
@@ -204,13 +213,15 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - 与 SSE 的 `tool_call` / `tool_result` 对齐
 
 ### 5.6 Working Memory
-**当前推荐技术：** 内存态 SessionState 扩展
+**当前推荐技术：** 内存态 SessionState 扩展 + 摘要对象 + TTL/容量限制
 
 **职责：**
 - 保存当前 requirement profile
 - 保存 itinerary 摘要
 - 保存最近检索 / 工具 / 反思上下文
 - 为下一轮路由和修正提供上下文基础
+- 每轮结束后压缩冗长上下文为摘要
+- 按容量、目的地切换和工具时效驱逐旧上下文
 
 ### 5.7 Reflection
 **推荐技术：** Java 规则校验 + LLM 结构化校验
@@ -233,6 +244,7 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 **当前状态：**
 - 还不是主链路优先项
 - 需在 Working Memory 路线稳定后再正式接入
+- MySQL 只承接正式会话和版本，不替代短期 Working Memory 的压缩与驱逐机制
 
 ---
 
@@ -241,12 +253,13 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 1. Spring MVC 主栈
 2. SSE 事件流
 3. Spring AI 结构化输出能力作为路由主基础
-4. 先修复 RAG Manifest 幂等入库，避免重复切分、重复 embedding、重复写库
-5. 先替换关键词/限制词主分流，再扩展高级 RAG
+4. 继续用 RAG Manifest 保护入库幂等，避免重复切分、重复 embedding、重复写库
+5. Phase 4A 已完成后，优先推进高级 RAG 的评估、混合召回、重排、拒答阈值和上下文压缩
 6. PgVector 作为内部知识库路线
-7. 内存态 Working Memory 先行，优先服务路由上下文
-8. Spring AI `@Tool` 作为当前工具主线，MCP 仅作为后续可选扩展
-9. Reflection 尽早进入主链路
+7. WeatherTool 继续保持受控 Spring AI `@Tool` 闭环，并作为后续工具扩展模板
+8. 内存态 Working Memory 先行，优先服务路由上下文
+9. Spring AI `@Tool` 作为当前工具主线，MCP 仅作为后续可选扩展
+10. Reflection 尽早进入主链路
 
 ### 当前不建议优先推进的
 - React / Vue 等复杂前端框架
@@ -255,7 +268,7 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - 把所有外部网页搜索直接等价成 RAG
 - 把 MCP 写成“现在必须落地”或“已经完全可用”的现状
 - 在主分流还不稳定时先铺开大量新工具
-- 在关键词主分流还存在时优先扩展 Phase 3B 高级 RAG
+- 在没有评估基准、负样本和拒答阈值时盲目扩大网页采集范围
 - PDF 导出
 
 ---
@@ -271,12 +284,19 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - DeepSeek OpenAI 兼容 API
 - PgVector 基础方向
 - 最小天气 API service/client 底座
+- Spring AI 结构化路由主链路
+- RAG / Tool / itinerary 受控编排闭环
+- WeatherTool Spring AI `@Tool` 注解化和受控工具闭环
 
 ### 还需要补齐的部分
-- RAG Manifest 幂等入库、pipeline version 和 active run 检索过滤
-- 结构化路由真正落地，并替换关键词/限制词主分流
-- RAG / Tool / itinerary 统一由路由结果驱动
-- Working Memory 扩展，先服务路由上下文
+- Phase 3B 高级 RAG：JSONL 评估集、负样本、报告输出
+- 数据安全与评估前置：测试不触发入库，入库失败不清旧 active run
+- 真实 PgVector score：从 Document metadata 或 PgVector SQL 获取 distance / similarity
+- 混合 RAG：PgVector 向量召回 + Postgres FTS / Lucene BM25 词法召回 + RRF 融合 + DashScope Reranker
+- Lucene fallback 索引同步：绑定 manifest active run，active run 变化或 chunk count 不一致时重建
+- RagRetrievalGate：低质量、错城市、实时问题和负样本拒答阈值
+- RagContextCompressor：控制进入 prompt 的证据长度和来源摘要
+- Working Memory 扩展，先服务路由上下文，并补齐上下文压缩与驱逐机制
 - Reflection loop 主链路化
 - 统一工具网关
 - 后续可选的 MCP integration
@@ -292,8 +312,9 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - **模型与结构化输出**：Spring AI + DeepSeek OpenAI 兼容 API，先用于结构化路由
 - **内部知识库**：Spring AI PgVector
 - **入库一致性**：PostgreSQL manifest 表 + JdbcTemplate + content/pipeline hash
-- **外部证据与工具方向**：Spring AI `@Tool` 当前优先，MCP 后续可选；高级 RAG 在路由稳定后补强
-- **上下文与修正**：内存态 Working Memory + Java/LLM 结合的 Reflection loop，优先支撑路由和局部修正
+- **高级 RAG**：PgVector 真实 distance/similarity + Postgres FTS / Lucene BM25 + RRF + DashScope `gte-rerank-v2` + JSONL 评估集 + JUnit/报告输出 + RagRetrievalGate + 上下文压缩
+- **外部证据与工具方向**：Spring AI `@Tool` 当前优先，MCP 后续可选；网页采集需受控治理，不做运行时随意爬取
+- **上下文与修正**：内存态 Working Memory + 摘要压缩/驱逐 + Java/LLM 结合的 Reflection loop，优先支撑路由和局部修正
 - **持久化**：后续以 MySQL + JPA 承接正式状态
 
 这条路线的关键优点是：**与当前仓库状态衔接自然，同时能支撑从“聊天骨架”演进到“真正旅游 Agent”。**

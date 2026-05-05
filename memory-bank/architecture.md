@@ -39,13 +39,16 @@
 - 最小 itinerary 生成与修改
 - 最小 RAG 闭环
 - RAG 来源展示
+- RAG Manifest 幂等入库与 active run 检索过滤
+- 结构化路由主链路
+- RAG / Tool / itinerary 受控编排闭环
+- WeatherTool 受控工具调用与 SSE 状态展示
 - 天气 API 调用底座
 
 ### 3.2 当前最主要的问题
 当前架构距离目标态还有明显差距：
-- 主流程仍依赖关键词/限定词判断
-- RAG 仍偏单路向量检索
-- 实时工具还不是统一工具层
+- RAG 仍偏单路向量检索，缺少评估基准、负样本、真实向量分数、中文词法召回、RRF 融合、专业重排和拒答阈值
+- RAG 上下文压缩与来源治理还不完整
 - MCP 在代码中还没有真实接入点，且不属于当前必须落地项
 - 工作记忆仍太薄
 - Reflection 还没有进入主链路
@@ -144,26 +147,26 @@ SSE 事件流
 - reason
 
 **当前现状：**
-- 尚未真正落地
-- `RagRetrievalDecider`、`ToolCallDecider`、`ItineraryModificationDetector` 实际上承担了这部分职责
+- 已通过 `IntentRoutingService` 落地主链路结构化路由
+- RAG / Tool / itinerary 生成和修改已经由结构化路由结果驱动
+- `RagRetrievalDecider`、`ToolCallDecider`、`ItineraryModificationDetector` 只允许作为历史债务、短期 fallback 或 guard，不再承担主流程分流
 
 **迁移方向：**
 - 这些类只能短期保留为 fallback / guard
 - 不应再作为长期主分流机制继续扩展
-- 当前第一优先级是让 RAG、Tool、itinerary 生成和 itinerary 修改统一由路由结果驱动
+- 当前第一优先级已经转为 Phase 3B 高级 RAG：评估基准、负样本、多路召回、重排、拒答阈值和上下文压缩
 
 ### 5.4 Working Memory 层
 **目标定位：**
 - 让系统记住“当前在做什么”，而不是每轮只看一句用户消息
+- Working Memory 是有限上下文窗口，不是无界历史仓库
 
 **最少需要保存：**
-- requirement profile
-- 当前 itinerary 摘要
-- 最近路由决策
-- 最近检索摘要与来源
-- 最近工具调用结果与失败状态
-- 最近用户修改意图摘要
-- 最近反思结论与修正动作
+- `stableProfile`：用户稳定需求画像
+- `activeItinerarySummary`：当前 itinerary 摘要
+- `recentTurns`：最近少量对话轮次
+- `recentDecisions`：最近路由、检索、工具和反思摘要
+- `volatileEvidence`：天气、票价、路线等有时效性的工具结果
 
 **当前现状：**
 - 内存态会话已经存在
@@ -171,7 +174,16 @@ SSE 事件流
 
 **迁移方向：**
 - 正式持久化前，先把 `SessionStateStore` 演进成 Working Memory 容器
+- Working Memory 必须支持摘要压缩、容量驱逐、目的地切换清理和时效性失效
 - 后续再映射到持久化模型
+
+**压缩与驱逐原则：**
+- RAG 只保存摘要、来源、主题、城市和时间，不保存完整 chunk。
+- Tool 只保存参数、结果摘要、成功/失败、来源和更新时间，不保存完整原始响应。
+- Reflection 只保存结论和修正动作摘要，不保存隐藏推理。
+- `recentTurns` 和 `recentDecisions` 默认各保留最近 5 条，超出后驱逐或压缩。
+- 用户切换目的地时，清理旧目的地强绑定的 RAG / Tool / itinerary 摘要。
+- Phase 7 负责长期持久化，不能替代 Phase 5 的短期上下文压缩。
 
 ### 5.5 知识层（Hybrid Retrieval）
 **目标定位：**
@@ -193,22 +205,38 @@ SSE 事件流
 
 **当前现状：**
 - 已具备内部向量检索最小闭环
-- 启动入库仍缺少数据库级幂等保护，不能继续每次启动重复切分和写入 PgVector
+- 启动入库已具备数据库级 manifest 幂等保护，避免每次启动重复切分和写入 PgVector
+- 检索已过滤当前 `active_run_id`，知识问答检索已收口为 city 优先，避免模型生成 topic 与入库 category 不一致导致 0 命中
 - 还没有外部检索统一接入
-- 还没有高级重排、压缩、来源治理
+- 还没有真实 PgVector score、Postgres FTS / Lucene BM25、RRF、DashScope Reranker、高级压缩和来源治理
 
 **迁移方向：**
 - 不用外部搜索完全替代内部知识库
 - 不把运行时网页正文直接塞进最终 prompt 当结论
-- 让两路结果统一进入排序、压缩、来源和不确定性表达
+- 当前先让 vector 与 BM25 两路结果进入候选合并、专业重排、证据裁判、上下文注入和不确定性表达
+- 词法召回第一版采用 Lucene BM25 内存索引，并预留后续 Postgres 中文 FTS（`zhparser` / `pg_jieba`）探测
+- Reranker 第一候选为 DashScope `gte-rerank-v2`，失败时 fallback 到合并候选原始排序
+- RRF / score fusion 和系统性分数评估放到 BM25 + Reranker + RagEvidenceJudge 链路稳定之后
+
+目标 Hybrid Retrieval 链路：
+```text
+Vector Recall + BM25 Recall
+  -> candidate union / dedup
+  -> DashScope Reranker
+  -> RagEvidenceJudge
+  -> Context Injection
+```
+
+Reranker 负责排序，不负责判断证据是否足够回答；`RagEvidenceJudge` 是证据充分性判断层，不替代 reranker。`RagEvidenceJudge` 可以按“子代理式裁判”设计，但对外必须封装为受控 Spring Service，并输出结构化 DTO。第一版 judge 批处理策略固定为每批最多 5 条 snippet、约 3000 字符上限、最多 3 批，并停止于首个 `evidenceEnough=true` 的批次。
 
 #### C. RAG 入库一致性
-内部知识库必须先具备稳定的启动入库策略：
+内部知识库已经具备基础稳定的启动入库策略：
 - 使用 `rag_ingestion_manifest` 表记录 bootstrap 文档的 `content_hash`、`pipeline_hash`、`active_run_id` 和 `status`。
 - `status=COMPLETED` 且内容指纹、处理策略指纹一致时，启动应跳过切分、embedding 和写入。
 - 文档内容、chunk 策略、metadata 结构、embedding 模型或维度变化时，通过 `pipeline_hash` 触发重建。
 - 重建时先写新 `run_id`，成功后切换 manifest 的 active run，再清理旧 run，避免失败后知识库为空。
-- 检索应优先过滤当前 `active_run_id`，避免新旧 chunk 混合命中。
+- 检索优先过滤当前 `active_run_id`，避免新旧 chunk 混合命中。
+- 当前知识问答检索不再使用模型生成的 topic 做精确硬过滤；topic 后续更适合作为 Phase 3B 重排信号。
 
 ### 5.6 工具层（Spring AI `@Tool` 优先，MCP 后续可选）
 **目标定位：**
@@ -338,21 +366,24 @@ Reflection loop 不一定需要单独新事件类型，第一阶段可以通过 
 4. Reflection loop
 
 ### 9.2 当前最需要推进的现实缺口
-1. 当前 RAG 启动入库不幂等，必须先用 manifest 状态机解决重复切分和重复写库
-2. 当前主流程仍依赖关键词分流，必须先被结构化路由替换
-3. 当前 RAG / Tool / itinerary 尚未统一由路由结果驱动
-4. 当前工具层还没有统一 `@Tool` / 外部工具抽象
-5. 当前混合 RAG 还没有形成完整链路
+1. 当前混合 RAG 还没有形成完整链路
+2. 当前 RAG 缺少项目内评估基准、负样本和可量化报告
+3. 当前 RAG 缺少 RagRetrievalGate 底线阈值，低质量检索仍可能污染 prompt
+4. 当前 RAG 尚未形成 Vector + BM25 + DashScope Reranker + RagEvidenceJudge 的完整候选治理链路
+5. 当前 Working Memory 仍不足以支撑多轮路由上下文
 6. 当前 Reflection 还没进入真实编排主链路
 
 ### 9.3 迁移顺序建议
-1. 先修复 RAG Manifest 幂等入库与重建一致性
-2. 结构化路由替换关键词主分流
-3. RAG / Tool / itinerary 统一由路由结果驱动
-4. SessionState 升级为 Working Memory，先服务路由上下文
-5. Reflection loop 前移到主链路
-6. 统一工具网关落地，并保留 MCP 作为后续可选扩展
-7. RAG 演进为内部知识库 + 外部证据混合检索
+1. Phase 3B-0 先稳定 RAG 数据安全与评估前置，确保测试不触发入库、不误清向量表
+2. Phase 3B-1 / 3B-2 建立 RAG 评估基准、负样本、报告输出和 RagRetrievalGate
+3. Phase 3B-3 保持真实 PgVector distance / similarity 可观测，移除固定兜底分
+4. Phase 3B-4 接入 Lucene BM25，并为 `LuceneBm25RagRecallService` 预留 `search(RagQuery)` 与 `rebuildIndex()` 两个入口
+5. Phase 3B-5 先做 candidate union / dedup，RRF 与 score fusion 后置
+6. Phase 3B-6 接入 DashScope `gte-rerank-v2`，失败时 fallback 到合并候选原始排序
+7. Phase 3B-7 引入 RagEvidenceJudge、上下文注入与来源治理
+8. SessionState 升级为 Working Memory，先服务路由上下文
+9. Reflection loop 前移到主链路
+10. 统一工具网关扩展更多 Spring AI `@Tool`，并保留 MCP 作为后续可选扩展
 
 ---
 
@@ -369,4 +400,4 @@ Reflection loop 不一定需要单独新事件类型，第一阶段可以通过 
 ---
 
 ## 11. 一句话架构策略
-系统以 Spring MVC + SSE 网页聊天室为入口，先以“结构化路由前置 + 受控编排 + Working Memory + Spring AI `@Tool` + Reflection loop”为核心拿掉关键词主分流，再补强高级 RAG，持续生成、校验并修正旅游 itinerary，同时对来源与不确定性做显式表达。
+系统以 Spring MVC + SSE 网页聊天室为入口，已完成结构化路由前置和受控编排闭环；下一步以 Phase 3B 的 Lucene BM25、DashScope Reranker、RagEvidenceJudge、上下文注入和来源治理为核心，先跑通完整候选治理链路；RRF、score fusion、系统性评估调参和网页采集治理放到链路稳定之后，再前移 Working Memory 与 Reflection loop。

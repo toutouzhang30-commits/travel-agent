@@ -37,6 +37,10 @@ public class IntentRoutingService {
                         8. 如果信息不足以生成 itinerary，选择 COLLECT_REQUIREMENT。
                         9. requiresRetrieval 只在 KNOWLEDGE_QA、GENERATE_ITINERARY、MODIFY_ITINERARY 需要知识补充时为 true。
                         10. toolName 只在 WEATHER_TOOL / MAPS_TOOL / PRICING_TOOL 时填写。
+                        11. 用户询问“第一次去怎么玩更顺”“住哪片区更方便”“胡同和美食怎么串起来”“拍照打卡适合哪些区域”这类玩法思路、区域顺序、路线串联、攻略建议时，优先选择 KNOWLEDGE_QA。
+                        12. 即使用户说了“两天”“周末”“怎么安排”，只要没有明确要求生成完整行程表、计划表、按天/按时间段 itinerary，就不要直接选择 GENERATE_ITINERARY。
+                        13. 只有当用户明确要求“生成/做一份/给我排一个”完整 itinerary，或目的地、天数、预算、节奏、兴趣等约束已经足够且语义目标是拿到可执行行程表时，才选择 GENERATE_ITINERARY。
+                        14. 示例：“北京第一次去怎么安排更顺？”属于 KNOWLEDGE_QA；“上海周末两天偏拍照打卡怎么安排？”属于 KNOWLEDGE_QA；“北京胡同和本地美食怎么串起来玩？”属于 KNOWLEDGE_QA。
                         """)
                 .build();
     }
