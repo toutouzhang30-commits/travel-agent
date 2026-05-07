@@ -2,7 +2,7 @@ package com.xingwuyou.travelagent.chat.routing;
 
 import com.xingwuyou.travelagent.chat.dto.TripRequirement;
 import com.xingwuyou.travelagent.chat.model.Itinerary;
-import com.xingwuyou.travelagent.chat.session.SessionState;
+import com.xingwuyou.travelagent.chat.session.model.SessionState;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;

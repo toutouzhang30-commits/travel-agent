@@ -1,4 +1,4 @@
-package com.xingwuyou.travelagent.chat.tool.amap;
+package com.xingwuyou.travelagent.chat.tool.maps;
 
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;

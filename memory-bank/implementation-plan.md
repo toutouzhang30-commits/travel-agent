@@ -15,10 +15,12 @@
 - 把目标态能力写成当前已完成
 
 新的主线是：
-1. **Phase 3B 高级 RAG**：在 Phase 4A 主路由稳定后，补强评估基准、负样本、多路召回、重排、拒答阈值和上下文压缩。
-2. **Working Memory 前移**：先内存态，优先服务路由上下文，不等 MySQL。
-3. **Reflection 最小闭环**：最多一次局部修正，不做无限循环。
-4. **工具扩展**：当前主线是 Spring AI `@Tool`，MCP 只作为后续可选扩展。
+1. **Phase 4B-1 MapsTool 已完成第一版调用闭环**：基于高德 Amap 的路线、距离、交通耗时工具已进入同步与 SSE 主链路，后续只做稳定性和体验补强。
+2. **Pricing 暂不实施**：票价、门票、余票等 PricingTool 暂时只保留路由与未接入提示，不做真实外部调用。
+3. **Working Memory 前移**：先内存态，优先服务路由上下文，不等 MySQL。
+4. **Reflection 最小闭环**：最多一次局部修正，不做无限循环。
+5. **RAG 收口继续推进**：MapsTool 完成后，已有 Phase 3B RAG 候选治理代码回到当前收口重点，继续验证编译、配置、回归测试、网页问答和失败降级。
+6. **工具扩展技术路线**：当前主线是 Spring AI `@Tool` + 本地 service/client 受控执行，MCP 只作为后续可选扩展。
 
 ---
 
@@ -35,22 +37,24 @@
 - Phase 3A 的 RAG 最小闭环已存在。
 - RAG 来源展示与检索区展示已有基础。
 - RAG Manifest 幂等入库、active run 检索过滤和知识问答检索收口已完成。
+- RAG 候选治理相关代码已开始出现：`PgVectorRagRecallService`、`LexicalRagRecallService`、`HybridRagRetrievalService`、`RagRetrievalGate`、`RagReranker` / `DashScopeRagReranker`、`RagRetrievalFlowService` 已在代码树中。
 - Phase 4A-1 结构化路由已完成，主流程由 `IntentRoutingService` 的结构化结果驱动。
 - Phase 4A-2 受控编排闭环已完成，RAG / Tool / itinerary 由路由结果触发并显式转换为 SSE 事件。
 - 天气 API 调用底座已存在。
+- Phase 4B-1 高德 MapsTool 已完成第一版主链路接入，可处理路线、距离、交通耗时问题，并在同步与 SSE 链路产生工具调用结果。
 
 ### 3.2 未完成但容易误判为已完成的能力
 - Working Memory 仍偏薄，当前主要保存 requirement / itinerary。
 - Reflection 还没有进入主链路。
-- Phase 3B 高级 RAG 尚未落地。
-- Maps / Pricing 等更多工具尚未进入主链路。
+- Phase 3B 高级 RAG 已有部分代码雏形，但尚未完成验收：仍需确认编译、配置、回归测试、网页问答效果和失败降级。
+- PricingTool 尚未进入真实外部调用；票价、门票、余票仍保持明确未接入提示。
 - MCP 尚未接入，且不是当前必须落地项。
 
 ### 3.3 迁移原则
 - 保留已验证的 Web、SSE、RAG、天气 API、itinerary 基础能力。
 - 不做大范围包迁移，先改职责边界。
 - 不把网页采集变成运行时随意爬网页。
-- Phase 4A 已完成后，优先补强高级 RAG 的质量、稳定性和可评估性。
+- Phase 4B-1 已完成后，继续收口 RAG 候选治理质量、稳定性和可评估性；PricingTool 仍暂停真实调用。
 
 ---
 
@@ -61,9 +65,9 @@
 | Phase 1 | 基线收敛与接口重塑 | 已完成 |
 | Phase 2 | Web UI 与流式聊天室 | 已完成 |
 | Phase 3A | RAG 最小闭环 | 已完成 |
-| Phase 3B | 高级 RAG、网页采集、多路召回、重排 | 当前第一优先级 |
+| Phase 3B | 高级 RAG 候选治理：BM25、hybrid union、reranker、gate、评估 | 接入中 / 待验证，MapsTool 完成后回到当前收口重点 |
 | Phase 4A | 结构化路由 + 受控 `@Tool` WeatherTool | 已完成 |
-| Phase 4B | Maps / Pricing 等更多工具 | 后续 |
+| Phase 4B | Maps / Pricing 等更多实时工具 | 高德 MapsTool 第一版已完成；Pricing 暂不做 |
 | Phase 5 | Agent 编排 + Working Memory + Reflection | 后续，但需前置设计 |
 | Phase 7 | 正式持久化、会话与版本化 | 后续 |
 | Phase 8 | 规则层、监控与上线准备 | 后续 |
@@ -140,7 +144,11 @@ Phase 3A 只代表 RAG 能跑通，不代表 RAG 架构成熟。
 把 RAG 从“本地文档单路向量检索”升级为可治理、可扩展、可解释、可评估的知识系统。Phase 3B 内部按“先稳定，再增强”的顺序推进：先保证数据安全、评估和拒答边界，再逐步实施真实向量分数、中文词法召回、RRF 融合、专业 reranker、上下文压缩和来源治理。
 
 ### 当前顺序
-Phase 4A-1 结构化路由和 Phase 4A-2 受控编排闭环已经完成，Phase 3B 现在成为当前第一优先级。但 Phase 3B 不应一次性铺开所有高级检索能力。短期优先完成 `Phase 3B-0 / 3B-1 / 3B-2`；`Phase 3B-3 ~ 3B-6` 作为已确认的后续高级检索增强路线，分步实施。
+Phase 4A-1 结构化路由和 Phase 4A-2 受控编排闭环已经完成，Phase 3B 现在成为当前第一优先级。但 Phase 3B 不应一次性铺开所有高级检索能力。
+
+当前仓库已经先行出现了一部分高级 RAG 代码：Lucene BM25 词法召回、vector + lexical 候选合并、DashScope reranker 条件化实现、NoOp fallback、RagRetrievalGate 和 RagRetrievalFlowService。它们应记录为“接入中/待验证”，不能写成完整完成。
+
+接下来优先级应先从“继续新增能力”改为“验证和收口已有 RAG 代码”：确认 Maven 编译、依赖、配置、fallback、网页来源展示、负样本边界和检索失败降级，再继续补 `RagEvidenceJudge`、评估报告和 RRF / score fusion。
 
 当前路线调整为先跑通完整候选治理链路，不先做 RRF、score fusion 和系统性评估调参。当前主链路为：
 
@@ -460,7 +468,7 @@ Reranker 第一候选为 DashScope `gte-rerank-v2`。
 
 ## Phase 4B：Maps / Pricing 等更多工具
 ### 目标
-在 Phase 4A 稳定后，把同一模式扩展到路线、距离、价格、票务等更多实时工具。
+在 Phase 4A 稳定后，把同一模式扩展到路线、距离、交通耗时等更多实时工具。Phase 4B-1 已完成基于高德 Amap 的 MapsTool 第一版调用闭环；PricingTool 暂不做真实调用。
 
 ### 关键要求
 - 每个工具都有清晰输入/输出 DTO。
@@ -468,116 +476,131 @@ Reranker 第一候选为 DashScope `gte-rerank-v2`。
 - 每个工具都能在 SSE 中展示 `tool_call` / `tool_result`。
 - MCP 可作为后续外部工具协议扩展选项，但当前不写成必须落地。
 
-### 当前实施优先级
-当前 RAG 先阶段性收口，不继续在本轮扩展 RRF、score fusion、网页采集治理和系统性评估调参。下一步优先推进 Phase 4B，顺序为：
+### 当前状态
+Phase 4B 现在拆分执行：
+- `MAPS_TOOL`：第一版已完成，继续使用高德 Amap 调用，覆盖路线、距离、交通耗时，并进入同步与 SSE 工具事件闭环。
+- `PRICING_TOOL`：暂不实施真实外部调用，继续返回未接入 PricingTool 的明确提示，不能由 RAG 编造票价。
+- Phase 3B RAG 候选治理：已有代码继续保留为接入中 / 待验证，MapsTool 完成后回到当前收口重点。
 
+当前仓库已经出现 `chat.tool.maps` 真实工具包，`AgentOrchestratorService` 已将 `MAPS_TOOL` 接入受控工具流；对 `PRICING_TOOL` 仍应视为明确不可用兜底。
+
+### Phase 4B-1：高德 MapsTool 接入（已完成第一版）
+目标是复用 WeatherTool 的受控工具模式，把路线问题纳入 Spring AI `@Tool` + 本地 service/client + SSE 事件闭环。当前第一版已完成，后续只做稳定性、错误提示和结果展示体验补强。
+
+已落地包结构：
 ```text
-MapsTool 最小闭环
-  -> PricingTool 最小闭环
-  -> Orchestrator 接入 tool_call / tool_result
-  -> 前端来源区和工具区验收
-  -> 再回到高级 RAG 深化
+chat/tool/maps/
+  ├─ MapsTool.java
+  ├─ common/
+  │   ├─ MapsQueryExtractor.java
+  │   └─ MapsAnswerGenerator.java
+  ├─ service/
+  │   └─ MapsToolService.java
+  ├─ client/
+  │   └─ AmapRouteClient.java
+  └─ dto/
+      ├─ MapsRouteRequest.java
+      ├─ MapsRouteResponse.java
+      ├─ RouteOption.java
+      └─ TravelMode.java
 ```
 
-### Phase 4B-1：MapsTool 最小闭环
-目标：处理路线、距离、交通耗时类问题，避免这类问题误入 RAG。
+各类归属：
+- `MapsTool.java` 属于 `chat.tool.maps`，暴露 Spring AI `@Tool` 入口。
+- `MapsQueryExtractor.java` 属于 `chat.tool.maps.common`，用 structured output 把自然语言路线问题转成 `MapsRouteRequest`。
+- `MapsAnswerGenerator.java` 属于 `chat.tool.maps.common`，把工具结果组装成用户可读回答。
+- `MapsToolService.java` 属于 `chat.tool.maps.service`，放执行 guardrail、失败降级和来源组装。
+- `AmapRouteClient.java` 属于 `chat.tool.maps.client`，只负责高德 API 调用。
+- `MapsRouteRequest`、`MapsRouteResponse`、`RouteOption`、`TravelMode` 属于 `chat.tool.maps.dto`。
 
-新增包结构：
+第一版 DTO 结构：
+```java
+public record MapsRouteRequest(
+        String city,
+        String origin,
+        String destination,
+        TravelMode travelMode,
+        String timeExpression,
+        String rawQuestion
+) {
+}
 
-```text
-src/main/java/com/xingwuyou/travelagent/chat/tool/maps/
-  dto/
-    MapsToolRequest.java
-    MapsToolResponse.java
-  client/
-    MapsClient.java
-    MapsClientResponse.java
-  MapsQueryExtractor.java
-  MapsTool.java
-  MapsAnswerGenerator.java
+public enum TravelMode {
+    WALKING,
+    TRANSIT,
+    DRIVING,
+    CYCLING
+}
+
+public record RouteOption(
+        String mode,
+        String durationText,
+        Integer durationMinutes,
+        String distanceText,
+        Integer distanceMeters,
+        String instructionSummary
+) {
+}
+
+public record MapsRouteResponse(
+        boolean success,
+        String city,
+        String origin,
+        String destination,
+        List<RouteOption> options,
+        SourceReferenceDto source,
+        String updatedAt,
+        String errorMessage
+) {
+}
 ```
 
-具体职责：
-- `MapsToolRequest`：结构化输入，至少包含 `origin`、`destination`、`city`、`travelMode`、`departureTimeText`。
-- `MapsToolResponse`：结构化输出，至少包含 `success`、`origin`、`destination`、`distanceText`、`durationText`、`routeSummary`、`source`、`updatedAt`、`errorMessage`。
-- `MapsQueryExtractor`：使用 Spring AI `.entity(MapsToolRequest.class)` 从自然语言抽取参数，不使用关键词、正则或 `String.contains()`。
-- `MapsClient`：封装真实地图 API 或临时 mock/fallback，负责 API key 缺失、超时、接口失败等硬边界。
-- `MapsTool`：受控工具执行层，调用 `MapsClient`，输出 `MapsToolResponse`。
-- `MapsAnswerGenerator`：把 `MapsToolResponse` 转成用户回答；失败时必须明确说明“不确定/暂不可用”，不能编造耗时。
+`MapsTool` 第一版形态：
+```java
+@Component
+public class MapsTool {
+    private final MapsToolService mapsToolService;
 
-修改点：
-- `IntentRoutingService`：补充 `MAPS_TOOL` 的结构化路由说明和示例，例如“从西湖到灵隐寺大概要多久？”、“北京南站到故宫怎么走更方便？”。
-- `AgentOrchestratorService`：参考 `executeWeatherToolFlow` 新增 `executeMapsToolFlow`，并在 `TOOL_RESULT` / `MAPS_TOOL` 分支中调用。
-- `AgentEvent` / `ToolCallPayloadDto` / `ToolResultPayloadDto`：优先复用现有结构；如字段不足，只做最小补充。
-- 前端页面：复用已有工具状态展示，不新建复杂视图。
+    public MapsTool(MapsToolService mapsToolService) {
+        this.mapsToolService = mapsToolService;
+    }
 
-验收问题：
-
-```text
-从西湖到灵隐寺大概要多久？ -> MAPS_TOOL
-北京南站到故宫怎么走更方便？ -> MAPS_TOOL
-上海外滩到武康路怎么去？ -> MAPS_TOOL
-杭州雨天怎么玩？ -> KNOWLEDGE_QA，不走 MAPS_TOOL
+    @Tool(description = """
+            查询两个地点之间的路线、距离和交通耗时。
+            只用于实时路线、交通方式、距离、耗时问题。
+            不用于回答旅游玩法、区域推荐或静态攻略问题。
+            """)
+    public MapsRouteResponse queryRoute(
+            @ToolParam(description = "路线查询结构化参数，包含城市、起点、终点、交通方式、时间表达和原始问题。")
+            MapsRouteRequest request
+    ) {
+        return mapsToolService.execute(request);
+    }
+}
 ```
 
-### Phase 4B-2：PricingTool 最小闭环
-目标：处理门票、价格、票务类问题，避免 RAG 编造实时或半实时价格。
+`MapsToolService` 第一版职责：
+- 校验 city / origin / destination 是否足够，不足时返回失败状态或让编排器追问。
+- 调用 `AmapRouteClient`，继续使用现有高德配置体系。
+- 统一封装 `SourceReferenceDto`，sourceName 建议为 `高德地图`。
+- 工具失败时返回 `success=false`、`errorMessage`、`updatedAt`，不能转 RAG 编造路线耗时。
+- 工具层 guardrail 放在 service/client，不放进自然语言解析逻辑。
 
-新增包结构：
+`AgentOrchestratorService` 接入点：
+- `orchestrateByRoute` 中已将 `MAPS_TOOL` 接入 `executeMapsToolFlow(...)`。
+- `streamChat` 中已将工具分支扩展到 `MAPS_TOOL`，可发送 `tool_call` 和 `tool_result`。
+- `PRICING_TOOL` 继续走未接入兜底。
 
-```text
-src/main/java/com/xingwuyou/travelagent/chat/tool/pricing/
-  dto/
-    PricingToolRequest.java
-    PricingToolResponse.java
-  client/
-    PricingClient.java
-    PricingClientResponse.java
-  PricingQueryExtractor.java
-  PricingTool.java
-  PricingAnswerGenerator.java
-```
+验收用例：
+- “从西湖到灵隐寺坐公交多久” 应走 `MAPS_TOOL`，页面显示 MapsTool 的 `tool_call` / `tool_result`。
+- “北京故宫到南锣鼓巷多远” 应走 `MAPS_TOOL`，不走 RAG。
+- “上海外滩到武康路怎么去” 应走 `MAPS_TOOL`，最终展示高德路线来源、距离、耗时和人类可读交通方式。
+- “杭州雨天怎么玩” 仍走 `KNOWLEDGE_QA`，不走 MapsTool。
+- “上海迪士尼今天门票多少钱” 仍走 `PRICING_TOOL` 未接入提示，不走 RAG 编造票价。
+- 高德 API 失败、缺 key 或请求超时时，最终回答明确说明实时路线工具失败，不伪装成静态攻略。
 
-具体职责：
-- `PricingToolRequest`：结构化输入，至少包含 `city`、`poiName`、`ticketType`、`visitDateText`、`travelerType`。
-- `PricingToolResponse`：结构化输出，至少包含 `success`、`poiName`、`priceText`、`currency`、`ticketType`、`source`、`updatedAt`、`errorMessage`。
-- `PricingQueryExtractor`：使用 Spring AI `.entity(PricingToolRequest.class)` 抽取票价查询参数。
-- `PricingClient`：封装真实票价 API 或临时不可用 fallback，负责来源、更新时间和失败状态。
-- `PricingTool`：受控工具执行层，调用 `PricingClient`，输出 `PricingToolResponse`。
-- `PricingAnswerGenerator`：生成最终回答；如果没有真实来源，必须说清楚暂不可可靠回答。
-
-修改点：
-- `IntentRoutingService`：补充 `PRICING_TOOL` 路由示例，例如“上海迪士尼今天门票多少钱？”、“北京故宫门票大概多少钱？”。
-- `AgentOrchestratorService`：参考 `executeWeatherToolFlow` 新增 `executePricingToolFlow`，并在 `TOOL_RESULT` / `PRICING_TOOL` 分支中调用。
-- RAG 负样本：保留“门票多少钱/今天价格/余票”类问题，确保不会进入 RAG。
-
-验收问题：
-
-```text
-上海迪士尼今天门票多少钱？ -> PRICING_TOOL
-北京故宫门票大概多少钱？ -> PRICING_TOOL
-杭州灵隐寺门票多少钱？ -> PRICING_TOOL
-上海周末两天偏拍照打卡怎么安排？ -> KNOWLEDGE_QA，不走 PRICING_TOOL
-```
-
-### Phase 4B-3：工具编排与 SSE 对齐
-目标：Maps / Pricing 的用户可见过程与 WeatherTool 一致。
-
-修改点：
-- `AgentOrchestratorService`：
-  - `MAPS_TOOL`：发送“正在准备路线工具参数”状态，再发 `tool_call`，再发 `tool_result`。
-  - `PRICING_TOOL`：发送“正在准备票价工具参数”状态，再发 `tool_call`，再发 `tool_result`。
-  - 工具失败时返回 `KNOWLEDGE_ANSWER` 类型的解释性回答，但内容必须明确工具失败或暂不可用。
-- 前端：
-  - 继续展示 `tool_call` / `tool_result`。
-  - 来源区可显示 tool source；如果 source 为空，不展示为可靠来源。
-
-### Phase 4B-4：回归测试与手工验收
-必须覆盖：
-- 路由测试：Maps / Pricing 问题进入对应 action。
-- 工具参数抽取测试：相对时间、地点、票种能进入 DTO。
-- 失败降级测试：API key 缺失或 client 失败时，最终回答不假装成功。
-- RAG 边界测试：路线、票价问题不进入 RAG；攻略型问题仍进入知识回答。
+### Phase 4B-2：PricingTool 暂停
+PricingTool 暂不实施真实外部调用。当前只保留结构化路由到 `PRICING_TOOL` 后的明确未接入提示，并继续要求 RAG gate 拒绝票价、门票、余票类实时问题。
 
 ---
 
@@ -661,19 +684,18 @@ Phase 7 不是 Working Memory 的起点，也不替代短期上下文压缩。Ph
 ## 6. 当前优先级
 当前不是所有能力同时推进。优先级如下：
 
-1. **Phase 4B-1：MapsTool 最小闭环**：先接路线、距离、交通耗时类工具，避免路线问题误入 RAG。
-2. **Phase 4B-2：PricingTool 最小闭环**：再接门票、价格、票务类工具，避免 RAG 编造实时或半实时价格。
-3. **Phase 4B-3：工具编排与 SSE 对齐**：Maps / Pricing 必须像 WeatherTool 一样展示 `tool_call` / `tool_result`。
-4. **Phase 4B-4：回归测试与手工验收**：覆盖路由、参数抽取、工具失败降级和 RAG 边界。
-5. **Phase 3B 后续深化**：RAG 评估、BM25、Reranker、RagEvidenceJudge、RRF、score fusion 和网页采集治理放到工具边界补齐后继续推进。
-6. **Working Memory 前移**：先内存态，优先补齐路由上下文。
-7. **Reflection 最小闭环**：最多一次局部修正。
+1. **Phase 3B 当前代码收口**：MapsTool 第一版已完成后，当前优先确认已有 BM25、hybrid union、reranker、gate、retrieval flow 能编译、能运行、能在网页问答中稳定展示来源与拒答边界。
+2. **PricingTool 暂不做**：`PRICING_TOOL` 继续返回明确未接入提示，不做票价、门票、余票真实调用，也不允许 RAG 编造价格。
+3. **Working Memory 前移**：先内存态，优先补齐路由上下文，后续服务地图参数补全、行程修改和工具结果时效驱逐。
+4. **Reflection 最小闭环**：最多一次局部修正。
+5. **Phase 3B 评估与后续深化**：最后补评估集、负样本、`RagEvidenceJudge`、真实 PgVector score、RRF / score fusion、上下文压缩和来源治理。
+6. **MapsTool 稳定性补强**：按真实测试结果补充超时提示、重试策略、交通方式展示和高德失败降级，但不扩大到 Pricing。
 
 原因：
-- RAG 当前先阶段性收口，已经足够支持网页问答验证、来源展示和基础边界观察。
-- 路线、距离、耗时、票价、门票属于实时或半实时问题，应优先进入工具层，不应继续由 RAG 兜底。
-- WeatherTool 已经形成可复用模板，Maps / Pricing 可以沿用同一套受控 `@Tool`、DTO、Extractor、AnswerGenerator 和 SSE 模式。
-- 工具边界补齐后，RAG 的负样本和拒答边界会更清晰，再继续推进高级 RAG 更稳。
+- 用户当前确认地图工具调用完成，因此当前重心回到 RAG 候选治理收口和后续 Agent 能力。
+- 路线、距离、交通耗时是典型实时工具问题，已经有 `MAPS_TOOL` 路由枚举和高德配置底座，适合复用 WeatherTool 的受控工具闭环。
+- PricingTool 涉及票价和余票来源可靠性，当前暂不实施，避免无来源价格幻觉。
+- 已有 RAG 候选治理代码继续保留为待验证，现在需要恢复为当前收口重点。
 - 没有 Working Memory，路由、工具参数补全、修改和 Reflection 都缺上下文。
 - 没有 Reflection，系统仍像单轮输出器，不像 Agent。
 
@@ -719,4 +741,4 @@ Phase 7 不是 Working Memory 的起点，也不替代短期上下文压缩。Ph
 ---
 
 ## 10. 一句话执行策略
-当前项目已经完成 Phase 4A 结构化路由前置、RAG 最小闭环和 WeatherTool 受控工具展示。当前 RAG 先阶段性收口，下一步优先推进 Phase 4B：先接 MapsTool，再接 PricingTool，并让路线、耗时、票价问题稳定走工具层；之后再回到高级 RAG、Working Memory 与 Reflection，把现有能跑的聊天骨架逐步收敛成真正的旅游 Agent。
+当前项目已经完成 Phase 4A 结构化路由前置、RAG 最小闭环、WeatherTool 受控工具展示和基于高德 Amap 的 MapsTool 第一版调用闭环；路线、距离、交通耗时问题已进入受控 `@Tool` + SSE 闭环。PricingTool 暂不做真实调用，当前继续推进 RAG 候选治理收口和评估深化。

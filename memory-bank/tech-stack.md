@@ -49,9 +49,9 @@
 | 专业重排 | DashScope `gte-rerank-v2` | 对融合候选做专业 rerank | Phase 3B 后续 |
 | 网页治理采集 | RestClient + Jsoup | 受控获取和清洗公开网页知识 | 目标态，未完整落地 |
 | 外部证据能力 | 受控网页采集 / 后续可选 MCP search/browser | 为高级 RAG 补 freshness 与覆盖率 | Phase 3B 目标，MCP 未落地 |
-| 主工具层 | Spring AI `@Tool` | 实时能力主工具调用方式 | 当前主线 |
+| 主工具层 | Spring AI `@Tool` | 实时能力主工具调用方式 | WeatherTool 与 MapsTool 已落地，Pricing 暂停 |
 | 后续工具协议 | MCP（可选） | 未来外部工具协议扩展 | 后续选项，当前非必须 |
-| 过渡工具底座 | 本地 service/client + 统一工具网关 | 承接天气等已存在能力，向 `@Tool` 主线过渡 | 部分已存在 |
+| 过渡工具底座 | 本地 service/client + 统一工具网关 | 承接天气、高德地图等外部 API 能力，向 `@Tool` 主线过渡 | WeatherTool / MapsTool 已存在 |
 | Working Memory | 内存态 SessionState 扩展 + 摘要对象 + TTL/容量限制 | 支撑多轮路由、检索、工具、反思 | 现状偏薄，需升级 |
 | Reflection | Java 规则 + LLM 结构化校验 | 有界自检与局部修正 | 目标态，未入主链路 |
 | 业务数据存储 | MySQL 8 | 会话、版本、来源快照等持久化 | 目标态，未进入主线 |
@@ -287,6 +287,7 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - Spring AI 结构化路由主链路
 - RAG / Tool / itinerary 受控编排闭环
 - WeatherTool Spring AI `@Tool` 注解化和受控工具闭环
+- MapsTool Spring AI `@Tool` 注解化和基于高德 Amap 的路线查询闭环
 
 ### 还需要补齐的部分
 - Phase 3B 高级 RAG：JSONL 评估集、负样本、报告输出
@@ -298,7 +299,7 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - RagContextCompressor：控制进入 prompt 的证据长度和来源摘要
 - Working Memory 扩展，先服务路由上下文，并补齐上下文压缩与驱逐机制
 - Reflection loop 主链路化
-- 统一工具网关
+- 统一工具网关与工具结果时效治理
 - 后续可选的 MCP integration
 - 外部证据能力
 - 路由稳定后的混合 RAG 排序与压缩

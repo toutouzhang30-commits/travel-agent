@@ -1,6 +1,6 @@
 package com.xingwuyou.travelagent.chat.tool.weather.common;
 
-import com.xingwuyou.travelagent.chat.session.SessionState;
+import com.xingwuyou.travelagent.chat.session.model.SessionState;
 import com.xingwuyou.travelagent.chat.tool.weather.dto.WeatherQueryParameters;
 import com.xingwuyou.travelagent.chat.tool.weather.dto.WeatherToolRequest;
 import org.springframework.ai.chat.client.ChatClient;

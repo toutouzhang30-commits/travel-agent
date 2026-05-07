@@ -1,7 +1,7 @@
 package com.xingwuyou.travelagent.chat.tool.weather.service;
 
 import com.xingwuyou.travelagent.chat.dto.SourceReferenceDto;
-import com.xingwuyou.travelagent.chat.tool.amap.AmapDistrictResolver;
+import com.xingwuyou.travelagent.chat.tool.maps.AmapDistrictResolver;
 import com.xingwuyou.travelagent.chat.tool.weather.client.AmapWeatherClient;
 import com.xingwuyou.travelagent.chat.tool.weather.dto.AmapForecastResponse;
 import com.xingwuyou.travelagent.chat.tool.weather.dto.WeatherForecastDay;

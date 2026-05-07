@@ -1,5 +1,6 @@
 package com.xingwuyou.travelagent.chat.session;
 
+import com.xingwuyou.travelagent.chat.session.model.SessionState;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;

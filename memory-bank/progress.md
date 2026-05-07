@@ -22,10 +22,20 @@
 - 已完成 PgVector 检索过滤当前 `active_run_id`。
 - 已完成 RAG 检索收口：知识问答优先按 city 过滤，不再用模型生成的 topic 做精确硬过滤。
 
+### Phase 3B：RAG 候选治理接入中
+- 已新增或已出现 `PgVectorRagRecallService`，用于向量召回入口。
+- 已新增或已出现 `LexicalRagRecallService`，使用 Lucene BM25 做词法召回雏形，并具备 `search(RagQuery)` 与 `rebuildIndex()`。
+- 已新增或已出现 `HybridRagRetrievalService`，用于合并 vector 与 lexical 候选，并接入 reranker 与 gate。
+- 已新增或已出现 `RagRetrievalGate`，用于拦截非 RAG action、低分、来源不足和城市不匹配结果。
+- 已新增或已出现 `RagReranker`、`NoOpRagReranker`、`DashScopeRagReranker`，用于重排抽象、禁用兜底和 DashScope 条件化重排。
+- 已新增或已出现 `RagRetrievalFlowService` / `RagRetrievalFlowResult`，用于把检索通过/拒绝结果交给编排层。
+- 以上能力记录为“接入中/待验证”，不是完整完成；仍需确认 Maven 编译、配置、回归测试和网页实际问答效果。
+
 ### 实时工具底座
 - 已存在天气 API 调用底座。
 - 已存在天气工具输入/输出 DTO、来源信息和失败处理雏形。
 - 页面和后端事件协议已支持 `tool_call` / `tool_result` 类型。
+- 已完成基于高德 Amap 的 MapsTool 第一版调用闭环，支持路线、距离、交通耗时类实时问题。
 
 ### Phase 4A：结构化路由与受控编排闭环
 - 已完成 Phase 4A-1：结构化路由落地，主链路由 `IntentRoutingService` 输出的结构化结果驱动。
@@ -33,50 +43,23 @@
 - 已完成关键词/限制词主分流替换，关键词类只允许作为历史债务或短期 fallback，不再承担主流程分流。
 - 已完成 WeatherTool 受控调用链路，工具执行过程可通过 `tool_call` / `tool_result` 展示。
 
+### Phase 4B-1：高德 MapsTool
+- 已新增并接入 `chat.tool.maps` 工具包。
+- 已完成 `MapsTool`、`MapsQueryExtractor`、`MapsAnswerGenerator`、`MapsToolService`、`AmapRouteClient` 和路线 DTO 的第一版闭环。
+- 已将 `MAPS_TOOL` 接入 `AgentOrchestratorService` 同步与 SSE 主链路。
+- 已支持地图工具来源、更新时间、成功/失败状态和前端工具事件展示。
+- PricingTool 仍暂停真实外部调用，继续返回明确未接入提示。
+
 ---
 
 ## 当前下一步
-### Phase 4B：Maps / Pricing 工具接入
-- 当前 RAG 先阶段性收口，用于网页问答验证、来源展示和基础边界观察；这不代表高级 RAG 已完成。
-- 下一步优先补齐实时 / 半实时工具边界，先接 MapsTool，再接 PricingTool。
-- MapsTool 负责路线、距离、交通耗时类问题，例如“从西湖到灵隐寺大概要多久？”。
-- PricingTool 负责门票、价格、票务类问题，例如“上海迪士尼今天门票多少钱？”。
-- Maps / Pricing 都复用 WeatherTool 的模式：结构化参数抽取 DTO、受控 Tool 执行、AnswerGenerator、`tool_call` / `tool_result` SSE 展示。
-- 工具失败时必须明确说明不可用或不确定，不能编造路线耗时或票价。
-- RAG 后续仍会继续推进 BM25、DashScope Reranker、RagEvidenceJudge、RRF / score fusion 和评估报告，但放到 Maps / Pricing 工具边界补齐之后。
-
-### Phase 4B 具体实施步骤
-1. 新增 `chat.tool.maps` 包：
-   - `dto/MapsToolRequest.java`
-   - `dto/MapsToolResponse.java`
-   - `client/MapsClient.java`
-   - `client/MapsClientResponse.java`
-   - `MapsQueryExtractor.java`
-   - `MapsTool.java`
-   - `MapsAnswerGenerator.java`
-2. 新增 `chat.tool.pricing` 包：
-   - `dto/PricingToolRequest.java`
-   - `dto/PricingToolResponse.java`
-   - `client/PricingClient.java`
-   - `client/PricingClientResponse.java`
-   - `PricingQueryExtractor.java`
-   - `PricingTool.java`
-   - `PricingAnswerGenerator.java`
-3. 修改 `IntentRoutingService`：
-   - 补充 `MAPS_TOOL` 示例：路线、距离、交通耗时。
-   - 补充 `PRICING_TOOL` 示例：门票、票价、余票、价格。
-4. 修改 `AgentOrchestratorService`：
-   - 参考 `executeWeatherToolFlow` 增加 `executeMapsToolFlow`。
-   - 参考 `executeWeatherToolFlow` 增加 `executePricingToolFlow`。
-   - 在工具分支中将 `MAPS_TOOL` / `PRICING_TOOL` 从“不支持兜底”切换为真实工具调用。
-5. 修改前端工具展示：
-   - 复用已有 `tool_call` / `tool_result` 展示。
-   - 工具 source 存在时进入来源区；source 为空时不展示为可靠来源。
-6. 补充回归测试：
-   - 路由测试。
-   - 参数抽取测试。
-   - 工具失败降级测试。
-   - RAG 边界测试。
+### Phase 3B：RAG 候选治理代码收口与验证
+- MapsTool 第一版调用闭环已经完成，当前重心回到 RAG 候选治理代码收口。
+- 下一步验证已有 RAG 候选治理代码是否能稳定运行：BM25 词法召回、vector + lexical 候选合并、reranker fallback、RagRetrievalGate 和 RagRetrievalFlowService。
+- 需要优先确认 Maven 编译、依赖版本、DashScope reranker 开关、API key 缺失 fallback、Lucene BM25 索引重建和 active run 绑定。
+- 需要在网页上验证来源区能看到同一问题的候选来源标识，例如 VECTOR、LEXICAL / BM25 或 HYBRID_UNION。
+- 需要补 RAG 负样本和评估报告，不能只靠手工提问判断“做成功了”。
+- Pricing 仍是后续 Phase 4B 工具扩展方向，但当前不展开真实外部调用。
 
 ### Phase 5 前置设计：Working Memory + Reflection
 - Working Memory 不能等到 Phase 7 才开始，短期先走内存态。
@@ -90,8 +73,10 @@
 - Working Memory 前移。
 - Working Memory 上下文压缩与驱逐机制。
 - Reflection 最小闭环。
-- Phase 4B Maps / Pricing 工具真实接入。
-- Phase 3B 高级 RAG：Lucene BM25、`rebuildIndex()`、DashScope Reranker、RagEvidenceJudge、上下文注入、来源治理和拒答边界。
+- Phase 4B PricingTool 真实接入。
+- MapsTool 稳定性补强：高德超时提示、必要时重试策略、交通方式展示和失败降级体验。
+- Phase 3B 高级 RAG 验收：当前已有 BM25、reranker、gate、hybrid flow 雏形，但仍需编译、测试、评估和网页验证。
+- Phase 3B 未完成项：`RagEvidenceJudge`、真实 PgVector score、上下文注入、来源治理和拒答边界系统化。
 - Phase 3B 后置项：RRF、score fusion、系统性评估指标调优、Postgres FTS 探测和网页采集治理。
 - MySQL 正式持久化与会话版本化。
 - MCP 仅作为后续可选外部工具协议扩展，目前不作为当前必须落地项。
@@ -111,4 +96,4 @@
 ---
 
 ## 当前一句话结论
-当前项目已经完成“旅游聊天骨架 + Web 页 + RAG 最小闭环 + RAG Manifest 幂等入库 + RAG 检索收口 + Phase 4A 结构化路由与受控编排闭环 + WeatherTool 受控工具展示”。当前 RAG 先阶段性收口，下一步推进 **Phase 4B Maps / Pricing 工具接入**：先接路线、距离、交通耗时，再接门票、票价、票务查询，并确保工具失败时明确不确定性；随后再回到 BM25、Reranker、RagEvidenceJudge 等高级 RAG 深化。
+当前项目已经完成“旅游聊天骨架 + Web 页 + RAG 最小闭环 + RAG Manifest 幂等入库 + RAG 检索收口 + Phase 4A 结构化路由与受控编排闭环 + WeatherTool 受控工具展示 + 高德 MapsTool 第一版调用闭环”。当前下一步是 **Phase 3B RAG 候选治理收口**：BM25、hybrid union、reranker、gate 和 retrieval flow 已有代码雏形，但仍需编译、测试、评估和网页验证；PricingTool 仍暂停真实外部调用。

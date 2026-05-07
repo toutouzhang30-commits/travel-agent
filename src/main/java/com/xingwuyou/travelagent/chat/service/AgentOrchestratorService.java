@@ -1,14 +1,14 @@
 package com.xingwuyou.travelagent.chat.service;
 
+import com.xingwuyou.travelagent.chat.agent.evidence.ItineraryEvidenceCollector;
+import com.xingwuyou.travelagent.chat.agent.evidence.dto.ItineraryEvidenceBundle;
 import com.xingwuyou.travelagent.chat.component.*;
 import com.xingwuyou.travelagent.chat.dto.*;
 import com.xingwuyou.travelagent.chat.model.Itinerary;
-import com.xingwuyou.travelagent.chat.rag.retrieval.*;
-import com.xingwuyou.travelagent.chat.rag.retrieval.dto.RagQuery;
 import com.xingwuyou.travelagent.chat.rag.retrieval.dto.RagRetrievalFlowResult;
 import com.xingwuyou.travelagent.chat.rag.retrieval.dto.RagRetrievalResult;
 import com.xingwuyou.travelagent.chat.rag.retrieval.service.RagRetrievalFlowService;
-import com.xingwuyou.travelagent.chat.session.SessionState;
+import com.xingwuyou.travelagent.chat.session.model.SessionState;
 import com.xingwuyou.travelagent.chat.session.SessionStateStore;
 import com.xingwuyou.travelagent.chat.tool.weather.WeatherTool;
 import com.xingwuyou.travelagent.chat.tool.weather.common.ToolAnswerGenerator;
@@ -21,17 +21,18 @@ import reactor.core.publisher.Flux;
 import com.xingwuyou.travelagent.chat.routing.IntentAction;
 import com.xingwuyou.travelagent.chat.routing.IntentRoutingDecision;
 import com.xingwuyou.travelagent.chat.routing.IntentRoutingService;
-import com.xingwuyou.travelagent.chat.rag.retrieval.hybrid.HybridRagRetrievalResult;
-import com.xingwuyou.travelagent.chat.rag.retrieval.hybrid.HybridRagRetrievalService;
-import com.xingwuyou.travelagent.chat.rag.retrieval.model.RagRecallSource;
-import com.xingwuyou.travelagent.chat.rag.retrieval.model.RagScoredDocument;
+import com.xingwuyou.travelagent.chat.tool.maps.MapsTool;
+import com.xingwuyou.travelagent.chat.tool.maps.common.MapsAnswerGenerator;
+import com.xingwuyou.travelagent.chat.tool.maps.common.MapsQueryExtractor;
+import com.xingwuyou.travelagent.chat.tool.maps.dto.MapsRouteRequest;
+import com.xingwuyou.travelagent.chat.tool.maps.dto.MapsRouteResponse;
+
 
 
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 
 //这是最重要的部分，基本上逻辑都在这里面
 @Service
@@ -52,6 +53,10 @@ public class AgentOrchestratorService implements ChatService {
     private final IntentRoutingService intentRoutingService;
     //private final HybridRagRetrievalService hybridRagRetrievalService;
     private final RagRetrievalFlowService ragRetrievalFlowService;
+    private final MapsQueryExtractor mapsQueryExtractor;
+    private final MapsTool mapsTool;
+    private final MapsAnswerGenerator mapsAnswerGenerator;
+    private final ItineraryEvidenceCollector itineraryEvidenceCollector;
 
 
 
@@ -71,8 +76,12 @@ public class AgentOrchestratorService implements ChatService {
             ToolAnswerGenerator toolAnswerGenerator,
             IntentRoutingService intentRoutingService,
             //HybridRagRetrievalService hybridRagRetrievalService
-            RagRetrievalFlowService ragRetrievalFlowService
-    ) {
+            RagRetrievalFlowService ragRetrievalFlowService,
+            MapsQueryExtractor mapsQueryExtractor,
+            MapsTool mapsTool,
+            MapsAnswerGenerator mapsAnswerGenerator,
+            ItineraryEvidenceCollector itineraryEvidenceCollector
+            ) {
         this.extractor = extractor;
         this.checker = checker;
         this.generator = generator;
@@ -89,6 +98,10 @@ public class AgentOrchestratorService implements ChatService {
         this.intentRoutingService = intentRoutingService;
         //this.hybridRagRetrievalService = hybridRagRetrievalService;
         this.ragRetrievalFlowService = ragRetrievalFlowService;
+        this.mapsQueryExtractor = mapsQueryExtractor;
+        this.mapsTool = mapsTool;
+        this.mapsAnswerGenerator = mapsAnswerGenerator;
+        this.itineraryEvidenceCollector=itineraryEvidenceCollector;
     }
 
     //为什么需要新增这个内部record?
@@ -123,7 +136,8 @@ public class AgentOrchestratorService implements ChatService {
         return switch (route.outputMode()) {
             case TOOL_RESULT -> switch (route.action()) {
                 case WEATHER_TOOL -> executeWeatherToolFlow(sessionId, message, currentState).response();
-                case PRICING_TOOL, MAPS_TOOL -> buildRealtimeUnsupportedResponse(sessionId);
+                case MAPS_TOOL -> executeMapsToolFlow(sessionId, message, currentState).response();
+                case PRICING_TOOL -> buildRealtimeUnsupportedResponse(sessionId);
                 default -> buildRoutingFailedResponse(sessionId);
             };
             case KNOWLEDGE_ANSWER -> handleKnowledgeAnswer(sessionId, message, currentState, route);
@@ -133,8 +147,6 @@ public class AgentOrchestratorService implements ChatService {
             case ROUTING_FAILED -> buildRoutingFailedResponse(sessionId);
         };
     }
-
-
 
 
     //流式回答
@@ -180,26 +192,31 @@ public class AgentOrchestratorService implements ChatService {
 
                 ChatResponse response;
 
-                if (route.action() == IntentAction.WEATHER_TOOL) {
-                    events.add(AgentEvent.status(sessionId, "正在准备天气工具参数"));
-
-                    ToolFlowResult toolFlowResult = executeWeatherToolFlow(
+                if (route.action() == IntentAction.WEATHER_TOOL || route.action() == IntentAction.MAPS_TOOL) {
+                    events.add(AgentEvent.status(
                             sessionId,
-                            chatRequest.message(),
-                            currentState
-                    );
+                            route.action() == IntentAction.MAPS_TOOL
+                                    ? "正在准备地图工具参数"
+                                    : "正在准备天气工具参数"
+                    ));
+
+                    ToolFlowResult toolFlowResult = route.action() == IntentAction.MAPS_TOOL
+                            ? executeMapsToolFlow(sessionId, chatRequest.message(), currentState)
+                            : executeWeatherToolFlow(sessionId, chatRequest.message(), currentState);
 
                     events.add(AgentEvent.toolCall(
                             sessionId,
-                            "正在调用天气工具",
+                            route.action() == IntentAction.MAPS_TOOL
+                                    ? "正在调用地图工具"
+                                    : "正在调用天气工具",
                             toolFlowResult.toolCallPayload()
                     ));
 
                     events.add(AgentEvent.toolResult(
                             sessionId,
                             toolFlowResult.toolResultPayload().success()
-                                    ? "天气工具调用完成"
-                                    : "天气工具调用失败，正在降级处理",
+                                    ? "工具调用完成"
+                                    : "工具调用失败，正在降级处理",
                             toolFlowResult.toolResultPayload()
                     ));
 
@@ -212,6 +229,7 @@ public class AgentOrchestratorService implements ChatService {
                             route
                     );
                 }
+
 
                 if (retrievalAttempted) {
                     int sourceCount = response.sources() == null ? 0 : response.sources().size();
@@ -246,6 +264,72 @@ public class AgentOrchestratorService implements ChatService {
                 return Flux.just(AgentEvent.error(errorSessionId, "处理失败：" + ex.getMessage()));
             }
         });
+    }
+
+    private ToolFlowResult executeMapsToolFlow(String sessionId, String message, SessionState currentState) {
+        MapsRouteRequest request = mapsQueryExtractor.extract(message, currentState);
+
+        ToolCallPayloadDto toolCallPayload = new ToolCallPayloadDto(
+                "MapsTool",
+                buildMapsToolCallSummary(request),
+                OffsetDateTime.now().toString()
+        );
+
+        MapsRouteResponse toolResponse = mapsTool.queryRoute(request);
+
+        ToolResultPayloadDto toolResultPayload = new ToolResultPayloadDto(
+                "MapsTool",
+                toolResponse.success(),
+                buildMapsToolResultSummary(toolResponse),
+                toolResponse.source(),
+                toolResponse.updatedAt(),
+                toolResponse.errorMessage()
+        );
+
+        String answer = mapsAnswerGenerator.buildMapsAnswer(request, toolResponse);
+
+        ChatResponse response = new ChatResponse(
+                sessionId,
+                ChatResponseType.KNOWLEDGE_ANSWER,
+                answer,
+                currentState.requirement(),
+                List.of(),
+                null,
+                null,
+                toolResponse.source() == null ? List.of() : List.of(toolResponse.source())
+        );
+
+        return new ToolFlowResult(response, toolCallPayload, toolResultPayload);
+    }
+
+    private String buildMapsToolCallSummary(MapsRouteRequest request) {
+        if (request == null) {
+            return "正在准备地图路线查询参数";
+        }
+        return "正在查询 %s 到 %s 的路线".formatted(
+                request.origin() == null ? "起点" : request.origin(),
+                request.destination() == null ? "终点" : request.destination()
+        );
+    }
+
+    private String buildMapsToolResultSummary(MapsRouteResponse response) {
+        if (response == null) {
+            return "地图工具没有返回结果";
+        }
+        if (!response.success()) {
+            return response.errorMessage();
+        }
+        if (response.options() == null || response.options().isEmpty()) {
+            return "地图工具没有返回可用路线";
+        }
+
+        var option = response.options().get(0);
+        return "%s 到 %s：%s，约 %s".formatted(
+                response.origin(),
+                response.destination(),
+                option.distanceText(),
+                option.durationText()
+        );
     }
 
 
@@ -359,7 +443,28 @@ public class AgentOrchestratorService implements ChatService {
 
 
 
-        Itinerary itinerary = generator.generate(merged, ragContext);
+        //Itinerary itinerary = generator.generate(merged, ragContext);
+        ItineraryEvidenceBundle beforeEvidence =
+                itineraryEvidenceCollector.collectBeforeGeneration(message, merged, currentState);
+
+        Itinerary draft = generator.generate(
+                merged,
+                ragContext,
+                beforeEvidence.toPromptContext()
+        );
+
+        ItineraryEvidenceBundle routeEvidence =
+                itineraryEvidenceCollector.collectAfterDraft(merged, draft, currentState);
+
+        ItineraryEvidenceBundle allEvidence = beforeEvidence.merge(routeEvidence);
+
+        Itinerary itinerary = generator.generate(
+                merged,
+                ragContext,
+                allEvidence.toPromptContext()
+        );
+
+
 
         return new ChatResponse(
                 sessionId,
@@ -394,7 +499,7 @@ public class AgentOrchestratorService implements ChatService {
                 sessionId,
                 ChatResponseType.KNOWLEDGE_ANSWER,
                 "这类问题属于实时信息（如天气、价格、门票），当前版本还没有接入实时工具，所以不能可靠回答。我现在可以帮助你做城市玩法建议、节奏建议和行程规划；" +
-                        "等接入 WeatherTool / PricingTool 后，再支持实时天气和价格查询。",
+                        " PricingTool 后，再支持实时价格查询。",
                 null,
                 List.of(),
                 null,

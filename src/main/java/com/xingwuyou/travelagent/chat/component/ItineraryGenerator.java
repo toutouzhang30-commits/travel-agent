@@ -15,17 +15,50 @@ public class ItineraryGenerator {
         this.chatClient = builder
                 .defaultSystem("""
                     你是一个旅游行程生成助手。
-                    你必须根据用户需求返回最小行程 JSON。
+                    你必须根据用户需求、旅游知识证据和实时工具证据返回最小行程 JSON。
                     严格遵守以下规则：
                     1. 只输出纯 JSON，不要 Markdown，不要解释。
                     2. days 数量必须等于 tripDays。
                     3. 每一天必须包含 morning / afternoon / evening。
                     4. 每个时间段必须包含 activityName / reason / budgetNote。
-                    5. 当前阶段不依赖真实景点数据库，可以给出合理的通用活动安排。
-                    6. 不要输出来源、交通、天气、注意事项等额外字段。
+                    5. 如果天气证据显示下雨，优先安排室内、短距离或可替代活动。
+                    6. 如果地图证据显示跨区域耗时较长，不要把这些点塞进同一个半天。
+                    7. 不要编造未由工具提供的实时天气、路线耗时或距离。
                     """)
                 .build();
     }
+
+
+    public Itinerary generate(TripRequirement requirement, String ragContext, String toolEvidenceContext) {
+        return chatClient.prompt()
+                .user("""
+                  请根据以下需求生成行程 JSON。
+
+                  destination: %s
+                  tripDays: %s
+                  budget: %s
+                  pacePreference: %s
+                  interests: %s
+
+                  旅游知识证据：
+                  %s
+
+                  实时工具证据：
+                  %s
+                  """.formatted(
+                        requirement.destination(),
+                        requirement.tripDays(),
+                        requirement.budget(),
+                        requirement.pacePreference(),
+                        requirement.interests(),
+                        ragContext == null ? "" : ragContext,
+                        toolEvidenceContext == null ? "" : toolEvidenceContext
+                ))
+                .call()
+                .entity(Itinerary.class);
+    }
+
+
 
     public Itinerary generate(TripRequirement requirement, String ragContext) {
         return chatClient.prompt()

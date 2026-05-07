@@ -13,7 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
     eventLogArea.innerText = '等待执行步骤...';
     retrievalArea.innerText = '尚未触发知识检索...';
     toolArea.innerText = '尚未触发工具调用...';
-    sourceArea.innerText = 'Phase 4 接入工具后将在此展示参考文档与工具来源...';
+    sourceArea.innerText = '将在此展示知识库来源和实时工具来源...';
 
     sendBtn.addEventListener('click', sendMessage);
     userInput.addEventListener('keypress', (event) => {
@@ -182,7 +182,9 @@ function updateSidePanelsFromStatus(message) {
         retrievalArea.innerText = message;
     }
 
-    if (message.includes('工具') || message.includes('天气') || message.includes('票价') || message.includes('路线')) {
+    if (message.includes('工具') || message.includes('天气') || message.includes('票价')
+            || message.includes('路线') || message.includes('地图') || message.includes('耗时')
+            || message.includes('距离')) {
         toolArea.innerText = message;
     }
 }
@@ -199,7 +201,7 @@ function summarizeToolCall(payload, fallbackMessage) {
         return fallbackMessage || '正在调用工具';
     }
 
-    return `${payload.toolName || '未知工具'}：${payload.summary || fallbackMessage || '正在调用'}`;
+    return `${formatToolName(payload.toolName)}：${payload.summary || fallbackMessage || '正在调用'}`;
 }
 
 function summarizeToolResult(payload, fallbackMessage) {
@@ -208,10 +210,10 @@ function summarizeToolResult(payload, fallbackMessage) {
     }
 
     if (!payload.success) {
-        return `${payload.toolName || '未知工具'} 调用失败：${payload.errorMessage || payload.summary || fallbackMessage || '未提供失败原因'}`;
+        return `${formatToolName(payload.toolName)} 调用失败：${payload.errorMessage || payload.summary || fallbackMessage || '未提供失败原因'}`;
     }
 
-    return `${payload.toolName || '未知工具'} 调用完成：${payload.summary || fallbackMessage || '已返回结果'}`;
+    return `${formatToolName(payload.toolName)} 调用完成：${payload.summary || fallbackMessage || '已返回结果'}`;
 }
 
 function renderRetrieval(event) {
@@ -233,7 +235,14 @@ function renderToolCall(payload) {
         return;
     }
 
-    toolArea.innerText = `调用中：${payload.toolName} - ${payload.summary}${payload.requestedAt ? `（请求时间：${payload.requestedAt}）` : ''}`;
+    toolArea.innerHTML = buildToolPanelHtml({
+        state: '调用中',
+        stateClass: 'running',
+        toolName: payload.toolName,
+        summary: payload.summary || '正在调用实时工具',
+        timeLabel: '请求时间',
+        timeValue: payload.requestedAt
+    });
 }
 
 function renderToolResult(payload) {
@@ -242,11 +251,42 @@ function renderToolResult(payload) {
     }
 
     if (!payload.success) {
-        toolArea.innerText = `失败：${payload.toolName} - ${payload.errorMessage || payload.summary}`;
+        toolArea.innerHTML = buildToolPanelHtml({
+            state: '失败',
+            stateClass: 'failed',
+            toolName: payload.toolName,
+            summary: payload.errorMessage || payload.summary || '工具调用失败',
+            timeLabel: '更新时间',
+            timeValue: payload.updatedAt
+        });
         return;
     }
 
-    toolArea.innerText = `完成：${payload.toolName} - ${payload.summary}${payload.updatedAt ? `（更新时间：${payload.updatedAt}）` : ''}`;
+    toolArea.innerHTML = buildToolPanelHtml({
+        state: '完成',
+        stateClass: 'success',
+        toolName: payload.toolName,
+        summary: payload.summary || '工具已返回结果',
+        timeLabel: '更新时间',
+        timeValue: payload.updatedAt
+    });
+}
+
+function buildToolPanelHtml({ state, stateClass, toolName, summary, timeLabel, timeValue }) {
+    const displayName = formatToolName(toolName);
+    const description = describeTool(toolName);
+
+    return `
+        <div class="tool-card tool-card-${escapeHtml(stateClass)}">
+            <div class="tool-card-header">
+                <span class="tool-card-state">${escapeHtml(state)}</span>
+                <strong>${escapeHtml(displayName)}</strong>
+            </div>
+            <div class="tool-card-summary">${escapeHtml(summary)}</div>
+            <div class="tool-card-meta">${escapeHtml(description)}</div>
+            ${timeValue ? `<div class="tool-card-meta">${escapeHtml(timeLabel)}：${escapeHtml(timeValue)}</div>` : ''}
+        </div>
+    `;
 }
 
 function renderSources(sources) {
@@ -273,14 +313,14 @@ function renderSources(sources) {
             : escapeHtml(sourceName);
 
         const title = sourceType === 'TOOL'
-            ? `${index + 1}. ${city} / ${toolName || topic}`
+            ? `${index + 1}. ${city} / ${formatToolName(toolName) || topic}`
             : `${index + 1}. ${city} / ${topic}`;
 
         return `
             <div style="padding: 8px 0; border-bottom: 1px dashed #e5e5e5;">
                 <div><strong>${escapeHtml(title)}</strong></div>
                 ${badges ? `<div style="margin: 6px 0;">${badges}</div>` : ''}
-                <div>类型：${escapeHtml(sourceType)}</div>
+                <div>类型：${escapeHtml(formatSourceType(sourceType))}</div>
                 <div>来源：${sourceLine}</div>
                 <div>时间：${escapeHtml(effectiveAt)}</div>
                 ${scoreLine ? `<div>评分：${scoreLine}</div>` : ''}
@@ -308,7 +348,7 @@ function summarizeRecallSources(sources) {
 function buildSourceBadges(sourceType, recallSources, scoreSource) {
     const labels = [];
     if (sourceType) {
-        labels.push(sourceType);
+        labels.push(formatSourceType(sourceType));
     }
     recallSources.forEach(recallSource => labels.push(formatRecallSource(recallSource)));
     if (scoreSource) {
@@ -318,6 +358,43 @@ function buildSourceBadges(sourceType, recallSources, scoreSource) {
     return [...new Set(labels.filter(Boolean))]
         .map(label => `<span class="source-badge">${escapeHtml(label)}</span>`)
         .join('');
+}
+
+function formatSourceType(sourceType) {
+    switch (sourceType) {
+        case 'TOOL':
+            return '实时工具';
+        case 'RAG':
+            return '知识库';
+        default:
+            return sourceType || '';
+    }
+}
+
+function formatToolName(toolName) {
+    switch (toolName) {
+        case 'WeatherTool':
+            return '天气工具';
+        case 'MapsTool':
+            return '地图工具';
+        case 'PricingTool':
+            return '票价工具';
+        default:
+            return toolName || '未知工具';
+    }
+}
+
+function describeTool(toolName) {
+    switch (toolName) {
+        case 'WeatherTool':
+            return '用于查询实时天气、温度、降雨等信息';
+        case 'MapsTool':
+            return '用于查询路线、距离和交通耗时，来源为地图服务';
+        case 'PricingTool':
+            return '用于查询实时票价、门票或余票状态';
+        default:
+            return '实时工具调用结果';
+    }
 }
 
 function formatRecallSource(source) {

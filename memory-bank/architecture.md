@@ -39,16 +39,19 @@
 - 最小 itinerary 生成与修改
 - 最小 RAG 闭环
 - RAG 来源展示
+- RAG 候选治理相关代码已开始接入：PgVector 向量召回、Lucene BM25 词法召回、hybrid union/dedup、`RagRetrievalGate`、`RagReranker` / DashScope reranker 与 NoOp fallback 已出现在代码树中
 - RAG Manifest 幂等入库与 active run 检索过滤
 - 结构化路由主链路
 - RAG / Tool / itinerary 受控编排闭环
 - WeatherTool 受控工具调用与 SSE 状态展示
+- 基于高德 Amap 的 MapsTool 已接入主链路，路线、距离、交通耗时问题可进入同步与 SSE 工具调用闭环
 - 天气 API 调用底座
 
 ### 3.2 当前最主要的问题
 当前架构距离目标态还有明显差距：
-- RAG 仍偏单路向量检索，缺少评估基准、负样本、真实向量分数、中文词法召回、RRF 融合、专业重排和拒答阈值
-- RAG 上下文压缩与来源治理还不完整
+- RAG 已从单路向量检索开始迁移到候选治理链路，但当前仍需编译、配置、回归测试和网页问答验证，不能写成高级 RAG 已完成
+- RAG 仍缺少评估基准、负样本、真实向量分数、RRF 融合、`RagEvidenceJudge` 和系统性评估报告
+- RAG 上下文压缩与来源治理仍较粗糙，当前更接近简单截断与基础来源传递
 - MCP 在代码中还没有真实接入点，且不属于当前必须落地项
 - 工作记忆仍太薄
 - Reflection 还没有进入主链路
@@ -154,7 +157,7 @@ SSE 事件流
 **迁移方向：**
 - 这些类只能短期保留为 fallback / guard
 - 不应再作为长期主分流机制继续扩展
-- 当前第一优先级已经转为 Phase 3B 高级 RAG：评估基准、负样本、多路召回、重排、拒答阈值和上下文压缩
+- Phase 4B-1 高德 MapsTool 已完成第一版调用闭环：路线、距离、交通耗时问题已进入受控工具闭环；当前继续推进 Phase 3B RAG 候选治理收口
 
 ### 5.4 Working Memory 层
 **目标定位：**
@@ -207,8 +210,9 @@ SSE 事件流
 - 已具备内部向量检索最小闭环
 - 启动入库已具备数据库级 manifest 幂等保护，避免每次启动重复切分和写入 PgVector
 - 检索已过滤当前 `active_run_id`，知识问答检索已收口为 city 优先，避免模型生成 topic 与入库 category 不一致导致 0 命中
+- 代码层已经出现 `LexicalRagRecallService`、`HybridRagRetrievalService`、`RagRetrievalGate`、`RagReranker`、`NoOpRagReranker` 和 `DashScopeRagReranker`，说明 RAG 正在从最小向量检索进入候选治理接入阶段
 - 还没有外部检索统一接入
-- 还没有真实 PgVector score、Postgres FTS / Lucene BM25、RRF、DashScope Reranker、高级压缩和来源治理
+- 还没有确认完成真实 PgVector score、RRF / score fusion、`RagEvidenceJudge`、系统性评估报告、Postgres FTS、网页采集治理和高级来源治理
 
 **迁移方向：**
 - 不用外部搜索完全替代内部知识库
@@ -246,13 +250,17 @@ Reranker 负责排序，不负责判断证据是否足够回答；`RagEvidenceJu
 
 **当前现状：**
 - 当前仓库里没有真实 MCP 接入
-- 天气工具底座已存在，但它本质仍是本地 service 调用
+- WeatherTool 已完成受控工具调用与 SSE 展示
+- 高德 MapsTool 已接入主链路，路线、距离、交通耗时问题可通过高德 Amap 获取实时结果
+- PricingTool 暂不实施真实外部调用，票价 / 门票 / 余票仍只能返回明确未接入提示
 
 **分阶段落地原则：**
 - 文档要明确当前优先 Spring AI `@Tool`
 - 同时保留未来接入 MCP 的扩展空间
-- 第一阶段先把 Weather 能力纳入统一工具层抽象
-- 后续如确有需要，再逐步接入 MCP search / browser / maps / pricing 能力
+- WeatherTool 与 MapsTool 已先后纳入受控工具闭环
+- MapsTool 当前第一版继续使用高德 Amap，覆盖路线、距离、交通耗时
+- PricingTool 暂停，不做真实票价或余票调用，不允许 RAG 编造价格
+- 后续如确有需要，再逐步评估 MCP search / browser 或 pricing 能力
 
 **工具层最少能力要求：**
 - 明确输入/输出 schema
@@ -297,6 +305,7 @@ chat/
   ├─ rag/
   ├─ tool/
   │   ├─ weather/
+  │   ├─ maps/
   │   └─ external/             # 后续可选 MCP / 外部工具协议适配
   ├─ session/
   │   └─ model/
@@ -308,7 +317,7 @@ chat/
 说明：
 - 当前 `chat/...` 可以继续作为迁移根包
 - 本轮重点不是大范围搬包，而是先把“新能力应该归哪层”写清楚
-- 后续新增类应优先进入 `routing` / `reflection` / `tool/weather` / `tool/external` / `session/model` / `rag/...`
+- 后续新增类应优先进入 `routing` / `reflection` / `tool/weather` / `tool/maps` / `tool/external` / `session/model` / `rag/...`
 
 ---
 
@@ -366,24 +375,24 @@ Reflection loop 不一定需要单独新事件类型，第一阶段可以通过 
 4. Reflection loop
 
 ### 9.2 当前最需要推进的现实缺口
-1. 当前混合 RAG 还没有形成完整链路
+1. 当前混合 RAG 已出现部分代码，但仍需要编译、配置和回归测试验证主链路稳定
 2. 当前 RAG 缺少项目内评估基准、负样本和可量化报告
-3. 当前 RAG 缺少 RagRetrievalGate 底线阈值，低质量检索仍可能污染 prompt
-4. 当前 RAG 尚未形成 Vector + BM25 + DashScope Reranker + RagEvidenceJudge 的完整候选治理链路
+3. 当前 `RagRetrievalGate` 已出现，但阈值、负样本和用户可见降级仍需验证
+4. 当前已出现 Vector + BM25 + Reranker 的候选治理雏形，但 `RagEvidenceJudge`、RRF / score fusion 和系统性评估仍未完成
 5. 当前 Working Memory 仍不足以支撑多轮路由上下文
 6. 当前 Reflection 还没进入真实编排主链路
 
 ### 9.3 迁移顺序建议
-1. Phase 3B-0 先稳定 RAG 数据安全与评估前置，确保测试不触发入库、不误清向量表
-2. Phase 3B-1 / 3B-2 建立 RAG 评估基准、负样本、报告输出和 RagRetrievalGate
-3. Phase 3B-3 保持真实 PgVector distance / similarity 可观测，移除固定兜底分
-4. Phase 3B-4 接入 Lucene BM25，并为 `LuceneBm25RagRecallService` 预留 `search(RagQuery)` 与 `rebuildIndex()` 两个入口
-5. Phase 3B-5 先做 candidate union / dedup，RRF 与 score fusion 后置
-6. Phase 3B-6 接入 DashScope `gte-rerank-v2`，失败时 fallback 到合并候选原始排序
-7. Phase 3B-7 引入 RagEvidenceJudge、上下文注入与来源治理
-8. SessionState 升级为 Working Memory，先服务路由上下文
-9. Reflection loop 前移到主链路
-10. 统一工具网关扩展更多 Spring AI `@Tool`，并保留 MCP 作为后续可选扩展
+1. Phase 4B-1 高德 MapsTool 已完成第一版调用闭环，后续只做稳定性和体验补强
+2. PricingTool 暂不实施真实调用，只保留结构化路由后的未接入提示，避免票价幻觉
+3. Phase 3B-0 / 3B-1 / 3B-2 收口 RAG 数据安全、评估基准、负样本、报告输出和 RagRetrievalGate
+4. Phase 3B-3 保持真实 PgVector distance / similarity 可观测，移除固定兜底分
+5. Phase 3B-4 接入 Lucene BM25，并为 `LuceneBm25RagRecallService` 预留 `search(RagQuery)` 与 `rebuildIndex()` 两个入口
+6. Phase 3B-5 先做 candidate union / dedup，RRF 与 score fusion 后置
+7. Phase 3B-6 接入 DashScope `gte-rerank-v2`，失败时 fallback 到合并候选原始排序
+8. Phase 3B-7 引入 RagEvidenceJudge、上下文注入与来源治理
+9. SessionState 升级为 Working Memory，先服务路由上下文、地图参数补全和工具结果时效驱逐
+10. Reflection loop 前移到主链路
 
 ---
 
@@ -399,58 +408,24 @@ Reflection loop 不一定需要单独新事件类型，第一阶段可以通过 
 
 ---
 
-## 11. 当前阶段调整：RAG 阶段性收口与 Maps / Pricing 工具接入
-当前 RAG 能力先停在“可用于网页问答验证、来源展示和基础候选解释”的阶段性节点，不在本轮继续推进 RRF、score fusion、网页采集治理和系统性评估调参。高级 RAG 仍保留为后续方向，但当前下一步优先转向 **Phase 4B：Maps / Pricing 工具接入**，把实时路线、距离、耗时、门票/价格类问题从 RAG 边界中拆出去。
+## 11. 当前仓库真实状态校准：MapsTool 已完成，RAG 候选治理待收口
+当前仓库的真实状态是：Phase 4A 结构化路由和 WeatherTool 受控工具闭环已完成；Phase 4B-1 基于高德 Amap 的 MapsTool 已完成第一版调用闭环，路线、距离、交通耗时问题已能进入受控工具链路；RAG 已经从最小向量检索继续推进到了候选治理代码接入阶段，但仍需要继续收口和验证。
 
-这个调整的原因是：
-- 天气、路线、票价都属于强时效或半时效信息，不应由静态 RAG 兜底。
-- WeatherTool 已经提供了可复用模板，Maps / Pricing 可以复用同一套 DTO、Extractor、Tool、AnswerGenerator、SSE 展示模式。
-- 工具层补齐后，RAG 的负样本边界会更清晰：路线、票价问题应进入工具层，而不是进入知识库回答。
+已经出现在代码树中的 RAG 相关能力包括：
+- `PgVectorRagRecallService`：向量召回入口。
+- `LexicalRagRecallService`：Lucene BM25 词法召回雏形，具备 `search(RagQuery)` 和 `rebuildIndex()`，并绑定 manifest active run。
+- `HybridRagRetrievalService`：合并 vector 与 lexical 候选，做 union / dedup，并调用 reranker 与 gate。
+- `RagRetrievalGate`：对非 RAG action、低分、来源不足和城市不匹配做底线拦截。
+- `RagReranker`、`NoOpRagReranker`、`DashScopeRagReranker`：重排抽象与 DashScope reranker 条件化实现，失败或缺少 key 时 fallback。
+- `RagRetrievalFlowService` / `RagRetrievalFlowResult`：把检索尝试、通过、拒绝结果封装给编排层消费。
 
-目标工具包结构：
-
-```text
-chat/
-  tool/
-    weather/                  # 已有天气工具模板
-    maps/
-      dto/
-      client/
-      MapsTool.java
-      MapsQueryExtractor.java
-      MapsAnswerGenerator.java
-    pricing/
-      dto/
-      client/
-      PricingTool.java
-      PricingQueryExtractor.java
-      PricingAnswerGenerator.java
-```
-
-编排目标链路：
-
-```text
-IntentRoutingService
-  -> AgentOrchestratorService
-  -> executeMapsToolFlow / executePricingToolFlow
-  -> tool_call SSE
-  -> MapsTool / PricingTool
-  -> tool_result SSE
-  -> final answer
-```
-
-短期可以先在 `AgentOrchestratorService` 中参考 WeatherTool 增加 `executeMapsToolFlow` 和 `executePricingToolFlow`。当 Weather / Maps / Pricing 三者重复明显后，再抽统一 `ToolFlowExecutor`，不要一开始为了抽象而重构过大。
-
-验收问题：
-
-```text
-从西湖到灵隐寺大概要多久？ -> MAPS_TOOL -> 工具结果或明确不可用
-北京南站到故宫怎么走更方便？ -> MAPS_TOOL -> 工具结果或明确不可用
-上海迪士尼今天门票多少钱？ -> PRICING_TOOL -> 工具结果或明确不可用
-北京故宫门票大概多少钱？ -> PRICING_TOOL -> 工具结果或明确不可用
-杭州雨天怎么玩？ -> KNOWLEDGE_QA / RAG，不走 WeatherTool 或 MapsTool
-北京第一次去怎么安排更顺？ -> KNOWLEDGE_QA / RAG，不走 MapsTool
-```
+仍不能写成已完成的部分：
+- 尚未确认 Maven 编译和测试全部通过。
+- `RagEvidenceJudge` 尚未落地。
+- RRF / score fusion 尚未落地。
+- 真实 PgVector distance / similarity 仍需确认。
+- 当前上下文压缩仍偏简单，不等于完整来源治理。
+- PricingTool 暂不实施真实外部调用，只保留未接入提示和 RAG 拒绝边界。
 
 ## 12. 一句话架构策略
-系统以 Spring MVC + SSE 网页聊天室为入口，已完成结构化路由前置、RAG 最小闭环和 WeatherTool 受控工具展示；当前 RAG 先阶段性收口，下一步优先扩展 Maps / Pricing 等 Spring AI `@Tool` 实时工具，把路线、距离、耗时、票价等问题从静态知识回答边界中拆出去，再回到高级 RAG、Working Memory 与 Reflection loop 的深化。
+系统以 Spring MVC + SSE 网页聊天室为入口，已完成结构化路由前置、RAG 最小闭环、WeatherTool 受控工具展示和基于高德 Amap 的 MapsTool 第一版调用闭环；路线、距离、交通耗时问题已进入受控 `@Tool` + SSE 闭环。PricingTool 暂停真实调用，下一步继续收口 RAG 候选治理、评估报告、`RagEvidenceJudge` 和来源治理。
