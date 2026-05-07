@@ -4,6 +4,7 @@ const userInput = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
 const statusArea = document.getElementById('status-area');
 const itineraryDisplay = document.getElementById('itinerary-display');
+const itineraryResizer = document.getElementById('itinerary-resizer');
 const eventLogArea = document.getElementById('event-log-area');
 const retrievalArea = document.getElementById('retrieval-area');
 const toolArea = document.getElementById('tool-area');
@@ -15,6 +16,8 @@ document.addEventListener('DOMContentLoaded', () => {
     toolArea.innerText = '尚未触发工具调用...';
     sourceArea.innerText = '将在此展示知识库来源和实时工具来源...';
 
+    initItineraryResizer();
+
     sendBtn.addEventListener('click', sendMessage);
     userInput.addEventListener('keypress', (event) => {
         if (event.key === 'Enter') {
@@ -22,6 +25,40 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 });
+
+function initItineraryResizer() {
+    if (!itineraryDisplay || !itineraryResizer) {
+        return;
+    }
+
+    let startY = 0;
+    let startHeight = 0;
+
+    const stopDragging = () => {
+        document.removeEventListener('mousemove', resizeItinerary);
+        document.removeEventListener('mouseup', stopDragging);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    };
+
+    const resizeItinerary = (event) => {
+        const deltaY = event.clientY - startY;
+        const minHeight = 260;
+        const maxHeight = Math.max(minHeight, Math.floor(window.innerHeight * 0.78));
+        const nextHeight = Math.min(maxHeight, Math.max(minHeight, startHeight + deltaY));
+        itineraryDisplay.style.height = `${nextHeight}px`;
+    };
+
+    itineraryResizer.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        startY = event.clientY;
+        startHeight = itineraryDisplay.getBoundingClientRect().height;
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', resizeItinerary);
+        document.addEventListener('mouseup', stopDragging);
+    });
+}
 
 async function sendMessage() {
     const message = userInput.value.trim();
@@ -127,8 +164,9 @@ function handleAgentEvent(event) {
             if (event.message) {
                 appendOrUpdateAiMessage(event.message);
             }
-            renderItineraryCard(event.payload?.itinerary);
-            renderSources(event.payload?.sources);
+            const itinerarySources = Array.isArray(event.payload?.sources) ? event.payload.sources : [];
+            renderItineraryCard(event.payload?.itinerary, itinerarySources);
+            renderSources(itinerarySources);
             break;
         case 'DONE':
             statusArea.innerText = '✅ 处理完成';
@@ -515,20 +553,27 @@ function appendOrUpdateAiMessage(text) {
     }
 }
 
-function renderItineraryCard(itinerary) {
+function renderItineraryCard(itinerary, sources = []) {
     if (!itinerary) return;
 
+    const days = Array.isArray(itinerary.days) ? itinerary.days : [];
+    const evidenceHtml = renderItineraryEvidencePanel(sources);
+
     let html = `
-        <div style="background: white; border-radius: 8px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-            <h2 style="margin-top: 0; color: #1a73e8;">${itinerary.destination}</h2>
-            <p><strong>行程天数：</strong>${itinerary.tripDays} 天</p>
-            <hr/>
+        <div class="itinerary-card">
+            <div class="itinerary-header">
+                <div>
+                    <h2>${escapeHtml(itinerary.destination || '未命名目的地')}</h2>
+                    <p><strong>行程天数：</strong>${escapeHtml(itinerary.tripDays || '-')} 天</p>
+                </div>
+            </div>
+            ${evidenceHtml}
     `;
 
-    itinerary.days.forEach((day) => {
+    days.forEach((day) => {
         html += `
-            <div style="margin-bottom: 20px; border-left: 4px solid #1a73e8; padding-left: 15px;">
-                <h4 style="margin: 10px 0;">第 ${day.dayNumber} 天</h4>
+            <div class="itinerary-day">
+                <h4>${escapeHtml(buildDayTitle(day))}</h4>
                 ${renderSlot('上午', day.morning)}
                 ${renderSlot('下午', day.afternoon)}
                 ${renderSlot('晚上', day.evening)}
@@ -541,14 +586,88 @@ function renderItineraryCard(itinerary) {
     itineraryDisplay.scrollTop = 0;
 }
 
+function buildDayTitle(day) {
+    const dayNumber = day?.dayNumber || '-';
+    const date = day?.date;
+    const weather = day?.weatherSummary;
+
+    if (date && weather) {
+        return `第 ${dayNumber} 天（${date}，天气：${weather}）`;
+    }
+
+    if (date) {
+        return `第 ${dayNumber} 天（${date}）`;
+    }
+
+    if (weather) {
+        return `第 ${dayNumber} 天（天气：${weather}）`;
+    }
+
+    return `第 ${dayNumber} 天`;
+}
+
 function renderSlot(timeLabel, slot) {
     if (!slot) return '';
 
     return `
-        <div style="margin-bottom: 10px; font-size: 0.95em;">
-            <div style="font-weight: bold; color: #555;">${timeLabel}：${slot.activityName}</div>
-            <div style="color: #666; font-size: 0.85em; margin-top: 2px;">推荐理由：${slot.reason}</div>
-            <div style="color: #1a73e8; font-size: 0.85em; margin-top: 2px;">预算提示：${slot.budgetNote}</div>
+        <div class="itinerary-slot">
+            <div class="slot-title">${escapeHtml(timeLabel)}：${escapeHtml(slot.activityName || '待安排')}</div>
+            <div class="slot-note">推荐理由：${escapeHtml(slot.reason || '暂无')}</div>
+            ${slot.routeRecommendation
+                ? `<div class="slot-route">路程推荐：${escapeHtml(slot.routeRecommendation)}</div>`
+                : ''}
+            <div class="slot-budget">预算提示：${escapeHtml(slot.budgetNote || '暂无')}</div>
+        </div>
+    `;
+}
+
+function renderItineraryEvidencePanel(sources) {
+    const evidence = splitToolEvidenceSources(sources);
+    if (evidence.weather.length === 0 && evidence.maps.length === 0) {
+        return '';
+    }
+
+    return `
+        <div class="itinerary-evidence-grid">
+            ${renderEvidenceList('天气依据', evidence.weather)}
+            ${renderEvidenceList('路线依据', evidence.maps)}
+        </div>
+    `;
+}
+
+function splitToolEvidenceSources(sources) {
+    const tools = Array.isArray(sources)
+        ? sources.filter(source => source?.sourceType === 'TOOL')
+        : [];
+
+    return {
+        weather: tools.filter(source => source.toolName === 'WeatherTool'),
+        maps: tools.filter(source => source.toolName === 'MapsTool')
+    };
+}
+
+function renderEvidenceList(title, items) {
+    if (!Array.isArray(items) || items.length === 0) {
+        return '';
+    }
+
+    return `
+        <section class="itinerary-evidence-panel">
+            <div class="evidence-title">${escapeHtml(title)}</div>
+            ${items.map(renderEvidenceItem).join('')}
+        </section>
+    `;
+}
+
+function renderEvidenceItem(source) {
+    const sourceName = source.sourceName || formatToolName(source.toolName);
+    const effectiveAt = source.effectiveAt || source.verifiedAt || '';
+    const summary = source.summary || '暂无摘要';
+
+    return `
+        <div class="evidence-item">
+            <div class="evidence-summary">${escapeHtml(summary)}</div>
+            <div class="evidence-meta">${escapeHtml(sourceName)}${effectiveAt ? ` · ${escapeHtml(effectiveAt)}` : ''}</div>
         </div>
     `;
 }

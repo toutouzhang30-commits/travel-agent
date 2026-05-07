@@ -26,9 +26,28 @@ public class ItineraryModifier {
                         7. 如果用户说“第二天太累了”，优先调整第二天，而不是全盘重写。
                         8. 如果用户说“不要博物馆，多安排吃的”，优先替换相关活动。
                         9. 如果用户说“预算再压低一点”，优先把活动改成更省钱的选项，并更新 budgetNote。
-
+                        10. 你返回的 Itinerary JSON 必须保留：
+                            - days[].date
+                            - days[].weatherSummary
+                            - morning/afternoon/evening.routeRecommendation
+                            如果原 itinerary 中已有日期、天气、路线推荐，除非修改需求明确要求改变，否则必须保留。
+                        11. 如果修改指令中包含实时工具证据：
+                            - MapsTool 证据的 dayNumber 和 targetSlot 决定 routeRecommendation 写入位置。
+                            - dayNumber=2,targetSlot=afternoon 的路线只能写入第2天 afternoon.routeRecommendation。
+                            - 不要把第1天路线写到第2天。
+                            - 没有成功 MapsTool 证据的位置保持 routeRecommendation 为 null 或原值。
+                        
                     """)
                 .build();
+    }
+
+
+    private String safeText(String value) {
+        return value == null || value.isBlank() ? "未提供" : value;
+    }
+
+    private String safeNumber(Integer value) {
+        return value == null ? "未提供" : value.toString();
     }
 
     public Itinerary modify(String message, TripRequirement requirement, Itinerary currentItinerary) {
@@ -42,6 +61,7 @@ public class ItineraryModifier {
                     预算档位：{budget}
                     节奏偏好：{pace}
                     兴趣点：{interests}
+                    开始日期：{startDate}
 
                     ### 2. 当前行程方案 (Current State)
                     {itineraryJson}
@@ -55,13 +75,17 @@ public class ItineraryModifier {
                     - 确保修改后的逻辑连贯（如：地点间的距离、时间衔接）。
                     - 直接输出修改后的完整 Itinerary JSON 对象。
                     """)
-                        .param("dest", requirement.destination())
-                        .param("days", requirement.tripDays())
-                        .param("budget", requirement.budget())
-                        .param("pace", requirement.pacePreference())
-                        .param("interests", requirement.interests() == null ? "" : String.join(", ", requirement.interests()))
+                        .param("dest", safeText(requirement.destination()))
+                        .param("days", safeNumber(requirement.tripDays()))
+                        .param("budget", safeText(requirement.budget()))
+                        .param("pace", safeText(requirement.pacePreference()))
+                        .param("interests", requirement.interests() == null || requirement.interests().isEmpty()
+                                ? "未提供"
+                                : String.join(", ", requirement.interests()))
+                        .param("startDate", safeText(requirement.startDate()))
                         .param("itineraryJson", currentItineraryText)
-                        .param("modMessage", message)
+                        .param("modMessage", safeText(message))
+
                 )
                 .call()
                 .entity(Itinerary.class);

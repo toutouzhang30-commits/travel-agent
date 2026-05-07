@@ -1,4 +1,7 @@
 package com.xingwuyou.travelagent.chat.agent.reflection;
 
-public class ItineraryReflectionResult {
+public record ItineraryReflectionResult(boolean requiresRevision,
+                                        String revisionInstruction,
+                                        String publicSummary
+) {
 }

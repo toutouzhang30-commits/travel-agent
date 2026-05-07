@@ -26,6 +26,13 @@ import com.xingwuyou.travelagent.chat.tool.maps.common.MapsAnswerGenerator;
 import com.xingwuyou.travelagent.chat.tool.maps.common.MapsQueryExtractor;
 import com.xingwuyou.travelagent.chat.tool.maps.dto.MapsRouteRequest;
 import com.xingwuyou.travelagent.chat.tool.maps.dto.MapsRouteResponse;
+import com.xingwuyou.travelagent.chat.agent.evidence.ToolEvidenceFactory;
+import com.xingwuyou.travelagent.chat.agent.reflection.ItineraryReflectionResult;
+import com.xingwuyou.travelagent.chat.agent.reflection.ItineraryReflectionService;
+import com.xingwuyou.travelagent.chat.session.model.ReflectionMemory;
+import com.xingwuyou.travelagent.chat.session.model.ToolEvidence;
+import com.xingwuyou.travelagent.chat.session.model.WorkingMemory;
+import com.xingwuyou.travelagent.chat.session.service.WorkingMemoryService;
 
 
 
@@ -57,6 +64,9 @@ public class AgentOrchestratorService implements ChatService {
     private final MapsTool mapsTool;
     private final MapsAnswerGenerator mapsAnswerGenerator;
     private final ItineraryEvidenceCollector itineraryEvidenceCollector;
+    private final WorkingMemoryService workingMemoryService;
+    private final ItineraryReflectionService itineraryReflectionService;
+
 
 
 
@@ -80,8 +90,11 @@ public class AgentOrchestratorService implements ChatService {
             MapsQueryExtractor mapsQueryExtractor,
             MapsTool mapsTool,
             MapsAnswerGenerator mapsAnswerGenerator,
-            ItineraryEvidenceCollector itineraryEvidenceCollector
-            ) {
+            ItineraryEvidenceCollector itineraryEvidenceCollector,
+            WorkingMemoryService workingMemoryService,
+            ItineraryReflectionService itineraryReflectionService
+
+    ) {
         this.extractor = extractor;
         this.checker = checker;
         this.generator = generator;
@@ -102,14 +115,28 @@ public class AgentOrchestratorService implements ChatService {
         this.mapsTool = mapsTool;
         this.mapsAnswerGenerator = mapsAnswerGenerator;
         this.itineraryEvidenceCollector=itineraryEvidenceCollector;
+        this.workingMemoryService = workingMemoryService;
+        this.itineraryReflectionService = itineraryReflectionService;
+
     }
 
     //为什么需要新增这个内部record?
     private record ToolFlowResult(
             ChatResponse response,
             ToolCallPayloadDto toolCallPayload,
-            ToolResultPayloadDto toolResultPayload
+            ToolResultPayloadDto toolResultPayload,
+            List<ToolEvidence> toolEvidence
     ) {
+    }
+
+    private record OrchestrationResult(
+            ChatResponse response,
+            List<ToolEvidence> toolEvidence,
+            ReflectionMemory reflectionMemory
+    ) {
+        static OrchestrationResult of(ChatResponse response) {
+            return new OrchestrationResult(response, List.of(), null);
+        }
     }
 
     @Override
@@ -121,30 +148,37 @@ public class AgentOrchestratorService implements ChatService {
         //这个确定问题的类型
         IntentRoutingDecision route = intentRoutingService.route(chatRequest.message(), currentState);
 
-        ChatResponse response = orchestrateByRoute(sessionId, chatRequest.message(), currentState, route);
+        OrchestrationResult result = orchestrateByRoute(sessionId, chatRequest.message(), currentState, route);
+        saveSessionState(sessionId, currentState, chatRequest.message(), result);
+        return result.response();
 
-        sessionStateStore.save(sessionId, currentState.merge(response.requirement(), response.itinerary()));
-        return response;
     }
 
     //目前走什么路径使用这个方法进行判断
-    private ChatResponse orchestrateByRoute(String sessionId, String message, SessionState currentState, IntentRoutingDecision route) {
+    private OrchestrationResult orchestrateByRoute(String sessionId, String message, SessionState currentState, IntentRoutingDecision route) {
         if (route == null || route.action() == null || route.outputMode() == null) {
-            return buildRoutingFailedResponse(sessionId);
+            return OrchestrationResult.of(buildRoutingFailedResponse(sessionId));
         }
 
         return switch (route.outputMode()) {
             case TOOL_RESULT -> switch (route.action()) {
-                case WEATHER_TOOL -> executeWeatherToolFlow(sessionId, message, currentState).response();
-                case MAPS_TOOL -> executeMapsToolFlow(sessionId, message, currentState).response();
-                case PRICING_TOOL -> buildRealtimeUnsupportedResponse(sessionId);
-                default -> buildRoutingFailedResponse(sessionId);
+                case WEATHER_TOOL -> {
+                    ToolFlowResult flow = executeWeatherToolFlow(sessionId, message, currentState);
+                    yield new OrchestrationResult(flow.response(), flow.toolEvidence(), null);
+                }
+                case MAPS_TOOL -> {
+                    ToolFlowResult flow = executeMapsToolFlow(sessionId, message, currentState);
+                    yield new OrchestrationResult(flow.response(), flow.toolEvidence(), null);
+                }
+                case PRICING_TOOL -> OrchestrationResult.of(buildRealtimeUnsupportedResponse(sessionId));
+                default -> OrchestrationResult.of(buildRoutingFailedResponse(sessionId));
             };
-            case KNOWLEDGE_ANSWER -> handleKnowledgeAnswer(sessionId, message, currentState, route);
+            case KNOWLEDGE_ANSWER -> OrchestrationResult.of(handleKnowledgeAnswer(sessionId, message, currentState, route));
             case ITINERARY -> handleRequirementAndGeneration(sessionId, message, currentState, route);
-            case ITINERARY_UPDATE -> handleItineraryModification(sessionId, message, currentState, route);
+            case ITINERARY_UPDATE -> OrchestrationResult.of(handleItineraryModification(sessionId, message, currentState, route));
             case FOLLOW_UP -> handleRequirementAndGeneration(sessionId, message, currentState, route);
-            case ROUTING_FAILED -> buildRoutingFailedResponse(sessionId);
+            case ROUTING_FAILED -> OrchestrationResult.of(buildRoutingFailedResponse(sessionId));
+
         };
     }
 
@@ -156,6 +190,7 @@ public class AgentOrchestratorService implements ChatService {
         return Flux.defer(() -> {
             String sessionId = null;
             List<AgentEvent> events = new ArrayList<>();
+
 
             try {
                 //前端消息进行非空校验
@@ -191,6 +226,7 @@ public class AgentOrchestratorService implements ChatService {
                 }
 
                 ChatResponse response;
+                OrchestrationResult orchestrationResult;
 
                 if (route.action() == IntentAction.WEATHER_TOOL || route.action() == IntentAction.MAPS_TOOL) {
                     events.add(AgentEvent.status(
@@ -221,13 +257,21 @@ public class AgentOrchestratorService implements ChatService {
                     ));
 
                     response = toolFlowResult.response();
+
+                    orchestrationResult = new OrchestrationResult(
+                            response,
+                            toolFlowResult.toolEvidence(),
+                            null
+                    );
                 } else {
-                    response = orchestrateByRoute(
+                    orchestrationResult = orchestrateByRoute(
                             sessionId,
                             chatRequest.message(),
                             currentState,
                             route
                     );
+
+                    response = orchestrationResult.response();
                 }
 
 
@@ -252,10 +296,13 @@ public class AgentOrchestratorService implements ChatService {
                     events.add(AgentEvent.answer(sessionId, response));
                 }
 
-                sessionStateStore.save(
+                saveSessionState(
                         sessionId,
-                        currentState.merge(response.requirement(), response.itinerary())
+                        currentState,
+                        chatRequest.message(),
+                        orchestrationResult
                 );
+
 
                 events.add(AgentEvent.done(sessionId));
                 return Flux.fromIterable(events);
@@ -299,7 +346,13 @@ public class AgentOrchestratorService implements ChatService {
                 toolResponse.source() == null ? List.of() : List.of(toolResponse.source())
         );
 
-        return new ToolFlowResult(response, toolCallPayload, toolResultPayload);
+        return new ToolFlowResult(
+                response,
+                toolCallPayload,
+                toolResultPayload,
+                List.of(ToolEvidenceFactory.fromMaps(toolResponse))
+        );
+
     }
 
     private String buildMapsToolCallSummary(MapsRouteRequest request) {
@@ -366,7 +419,13 @@ public class AgentOrchestratorService implements ChatService {
                 toolResponse.source() == null ? List.of() : List.of(toolResponse.source())
         );
 
-        return new ToolFlowResult(response, toolCallPayload, toolResultPayload);
+        return new ToolFlowResult(
+                response,
+                toolCallPayload,
+                toolResultPayload,
+                List.of(ToolEvidenceFactory.fromWeather(toolResponse))
+        );
+
     }
 
     private String buildWeatherToolCallSummary(WeatherToolRequest request) {
@@ -403,7 +462,7 @@ public class AgentOrchestratorService implements ChatService {
     }
 
 
-    private ChatResponse handleRequirementAndGeneration(
+    private OrchestrationResult handleRequirementAndGeneration(
             String sessionId,
             String message,
             SessionState currentState,
@@ -414,12 +473,12 @@ public class AgentOrchestratorService implements ChatService {
 
         List<String> missingCoreFields = checker.findMissingFields(merged);
         if (!missingCoreFields.isEmpty()) {
-            return buildFollowUpResponse(sessionId, merged, missingCoreFields);
+            return OrchestrationResult.of(buildFollowUpResponse(sessionId, merged, missingCoreFields));
         }
 
         List<String> missingPreferenceFields = checker.findMissingPreferencFields(merged);
         if (!missingPreferenceFields.isEmpty()) {
-            return buildFollowUpResponse(sessionId, merged, missingPreferenceFields);
+            return OrchestrationResult.of(buildFollowUpResponse(sessionId, merged, missingPreferenceFields));
         }
 
         List<SourceReferenceDto> sources = List.of();
@@ -441,9 +500,9 @@ public class AgentOrchestratorService implements ChatService {
         }
 
 
-
-
         //Itinerary itinerary = generator.generate(merged, ragContext);
+        //这一步分由react agent的效果吗？
+        //这是reflection模式(流程是定好的)，不是react
         ItineraryEvidenceBundle beforeEvidence =
                 itineraryEvidenceCollector.collectBeforeGeneration(message, merged, currentState);
 
@@ -453,30 +512,138 @@ public class AgentOrchestratorService implements ChatService {
                 beforeEvidence.toPromptContext()
         );
 
+        //根据初稿再去收集证据
         ItineraryEvidenceBundle routeEvidence =
                 itineraryEvidenceCollector.collectAfterDraft(merged, draft, currentState);
 
         ItineraryEvidenceBundle allEvidence = beforeEvidence.merge(routeEvidence);
 
-        Itinerary itinerary = generator.generate(
+        //反思环节
+        ItineraryReflectionResult reflection = itineraryReflectionService.review(
                 merged,
+                draft,
                 ragContext,
                 allEvidence.toPromptContext()
         );
 
+        //修正
+        Itinerary finalItinerary = draft;
+        ReflectionMemory reflectionMemory = null;
 
+        if (reflection != null && reflection.requiresRevision()) {
+            finalItinerary = modifier.modify(
+                    reflection.revisionInstruction()
+                            + "\n\n实时工具证据：\n"
+                            + allEvidence.toPromptContext(),
+                    merged,
+                    draft
+            );
 
-        return new ChatResponse(
+            reflectionMemory = new ReflectionMemory(
+                    true,
+                    reflection.publicSummary(),
+                    OffsetDateTime.now().toString()
+            );
+        } else if (reflection != null) {
+            reflectionMemory = new ReflectionMemory(
+                    false,
+                    reflection.publicSummary(),
+                    OffsetDateTime.now().toString()
+            );
+        }
+
+        List<SourceReferenceDto> responseSources = mergeSourcesWithToolEvidence(
+                sources,
+                allEvidence.toolEvidence()
+        );
+
+        ChatResponse response = new ChatResponse(
                 sessionId,
                 ChatResponseType.ITINERARY,
-                "已为你生成最小行程结果。",
+                "已为你生成结合实时信息的行程结果。",
                 merged,
                 List.of(),
                 null,
-                itinerary,
-                sources
+                finalItinerary,
+                responseSources
+        );
+
+        return new OrchestrationResult(
+                response,
+                allEvidence.toolEvidence(),
+                reflectionMemory
+        );
+
+    }
+
+    private List<SourceReferenceDto> mergeSourcesWithToolEvidence(
+            List<SourceReferenceDto> sources,
+            List<ToolEvidence> evidence
+    ) {
+        List<SourceReferenceDto> merged = new ArrayList<>(sources == null ? List.of() : sources);
+
+        if (evidence != null) {
+            for (ToolEvidence item : evidence) {
+                if (item == null || !item.success()) {
+                    continue;
+                }
+
+                SourceReferenceDto source = toToolSource(item);
+                if (source != null) {
+                    merged.add(source);
+                }
+            }
+        }
+
+        return List.copyOf(merged);
+    }
+
+
+    private SourceReferenceDto toToolSource(ToolEvidence evidence) {
+        if (evidence == null) {
+            return null;
+        }
+
+        String sourceName = StringUtils.hasText(evidence.sourceName())
+                ? evidence.sourceName()
+                : evidence.toolName();
+        String summary = StringUtils.hasText(evidence.summary())
+                ? evidence.summary()
+                : evidence.errorMessage();
+
+        return SourceReferenceDto.tool(
+                evidence.city(),
+                sourceName,
+                null,
+                evidence.updatedAt(),
+                summary,
+                evidence.toolName()
         );
     }
+
+    //保存记忆方法
+    private void saveSessionState(
+            String sessionId,
+            SessionState currentState,
+            String userMessage,
+            OrchestrationResult result
+    ) {
+        ChatResponse response = result.response();
+
+        WorkingMemory nextMemory = workingMemoryService.remember(
+                currentState,
+                userMessage,
+                response,
+                result.toolEvidence(),
+                result.reflectionMemory()
+        );
+
+        sessionStateStore.save(
+                sessionId,
+                currentState.merge(response.requirement(), response.itinerary(), nextMemory)
+        );
+    }
+
 
     private ChatResponse buildRoutingFailedResponse(String sessionId) {
         return new ChatResponse(
@@ -677,7 +844,8 @@ public class AgentOrchestratorService implements ChatService {
                 extracted.tripDays() != null ? extracted.tripDays() : current.tripDays(),
                 extracted.budget() != null ? extracted.budget() : current.budget(),
                 extracted.pacePreference() != null ? extracted.pacePreference() : current.pacePreference(),
-                mergedInterests
+                mergedInterests,
+                extracted.startDate() != null ? extracted.startDate() : current.startDate()
         );
     }
 

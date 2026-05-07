@@ -86,8 +86,8 @@ public class WorkingMemoryService {
             return "本轮没有生成有效回复。";
         }
 
-        String answer = response.answer() == null ? "" : response.answer();
-        String base = "类型：" + response.type() + "；回复：" + answer;
+        String message = response.message() == null ? "" : response.message();
+        String base = "类型：" + response.type() + "；回复：" + message;
 
         return truncate(base, MAX_SUMMARY_LENGTH);
     }

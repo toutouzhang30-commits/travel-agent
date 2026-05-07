@@ -24,13 +24,29 @@ public record ItineraryEvidenceBundle(List<ToolEvidence> toolEvidence) {
         if (toolEvidence == null || toolEvidence.isEmpty()) {
             return "";
         }
+
         return toolEvidence.stream()
-                .map(e -> "- %s：%s，更新时间：%s，状态：%s".formatted(
-                        e.toolName(),
-                        e.summary(),
-                        e.updatedAt(),
-                        e.success() ? "成功" : "失败：" + e.errorMessage()
-                ))
+                .filter(ToolEvidence::success)
+                .map(e -> {
+                    if ("MapsTool".equals(e.toolName())) {
+                        return "- MapsTool：dayNumber=%s，targetSlot=%s，origin=%s，destination=%s，route=%s，更新时间：%s，状态：成功"
+                                .formatted(
+                                        e.dayNumber(),
+                                        e.targetSlot(),
+                                        e.origin(),
+                                        e.destination(),
+                                        e.summary(),
+                                        e.updatedAt()
+                                );
+                    }
+
+                    return "- %s：%s，更新时间：%s，状态：成功".formatted(
+                            e.toolName(),
+                            e.summary(),
+                            e.updatedAt()
+                    );
+                })
                 .collect(Collectors.joining("\n"));
+
     }
 }

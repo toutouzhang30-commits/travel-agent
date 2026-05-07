@@ -5,12 +5,15 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDate;
 import java.util.List;
 
 //需要提取
 @Component
 public class TripRequirementExtractor {
-    private static final TripRequirement EMPTY_REQUIREMENT = new TripRequirement(null, null, null, null, List.of());
+    private static final TripRequirement EMPTY_REQUIREMENT =
+            new TripRequirement(null, null, null, null, List.of(), null);
+
 
     private final ChatClient chatClient;
 
@@ -61,11 +64,11 @@ public class TripRequirementExtractor {
 
         String focusField = pendingFields.getFirst();
         if ("budget".equals(focusField) && message.matches("^\\d+(?:\\.\\d+)?$")) {
-            return new TripRequirement(null, null, message, null, List.of());
+            return new TripRequirement(null, null, message, null, List.of(), null);
         }
 
         if ("tripDays".equals(focusField) && message.matches("^\\d{1,2}$")) {
-            return new TripRequirement(null, Integer.parseInt(message), null, null, List.of());
+            return new TripRequirement(null, Integer.parseInt(message), null, null, List.of(), null);
         }
 
         return null;
@@ -74,26 +77,51 @@ public class TripRequirementExtractor {
     private String buildExtractionPrompt(String message, TripRequirement currentRequirement, List<String> pendingFields) {
         TripRequirement requirement = currentRequirement == null ? EMPTY_REQUIREMENT : currentRequirement;
         List<String> fields = pendingFields == null ? List.of() : pendingFields;
+        String today = LocalDate.now().toString();
 
         return """
-                当前已知需求（仅用于理解上下文，不代表本轮新增信息）：
-                - destination: %s
-                - tripDays: %s
-                - budget: %s
-                - pacePreference: %s
-                - interests: %s
+            当前系统日期：
+            %s
 
-                当前仍缺失的字段（按优先级排序）：
-                %s
+            当前已知需求（仅用于理解上下文，不代表本轮新增信息）：
+            - destination: %s
+            - tripDays: %s
+            - budget: %s
+            - pacePreference: %s
+            - interests: %s
+            - startDate: %s
 
-                用户本轮输入：
-                %s
-                """.formatted(
+            当前仍缺失的字段（按优先级排序）：
+            %s
+
+            用户本轮输入：
+            %s
+
+            请只提取用户本轮明确表达的新信息，并返回 TripRequirement JSON。
+
+            日期抽取规则：
+            1. 如果用户说“今天开始”“今天出发”“今天去”，startDate = 当前系统日期。
+            2. 如果用户说“明天开始”“明天出发”“明天去”，startDate = 当前系统日期 + 1 天。
+            3. 如果用户说“后天开始”“后天出发”“后天去”，startDate = 当前系统日期 + 2 天。
+            4. 如果用户说“2026-05-20”这类完整日期，startDate = 该日期。
+            5. 如果用户说“5月20日”这类没有年份的日期，使用当前系统日期所在年份；如果该日期已经早于当前系统日期，则使用下一年。
+            6. 如果用户说“下周六”“下周日”，请结合当前系统日期转换成唯一 yyyy-MM-dd。
+            7. 如果用户只说“周末”“过几天”“之后”，但无法唯一确定日期，startDate = null。
+            8. 如果用户没有提供开始日期，startDate = null。
+            9. 不要凭空猜测日期。
+
+            输出要求：
+            1. 只输出 JSON。
+            2. 没有提到的字段必须为 null，interests 没提到则为 []。
+            3. startDate 必须是 yyyy-MM-dd 或 null。
+            """.formatted(
+                today,
                 nullableText(requirement.destination()),
                 requirement.tripDays() == null ? "null" : requirement.tripDays(),
                 nullableText(requirement.budget()),
                 nullableText(requirement.pacePreference()),
                 requirement.interests() == null || requirement.interests().isEmpty() ? "[]" : requirement.interests(),
+                nullableText(requirement.startDate()),
                 fields.isEmpty() ? "[]" : fields,
                 message
         );

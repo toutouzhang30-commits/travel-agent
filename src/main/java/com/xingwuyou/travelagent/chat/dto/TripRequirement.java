@@ -7,5 +7,6 @@ public record TripRequirement(String destination,
                               Integer tripDays,
                               String budget,
                               String pacePreference,
-                              List<String> interests) {
+                              List<String> interests,
+                              String startDate) {
 }

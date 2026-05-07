@@ -12,28 +12,21 @@ import java.util.List;
 public class RequirementCompletenessChecker {
     public List<String> findMissingFields(TripRequirement tripRequirement){
         TripRequirement requirement = normalize(tripRequirement);
-        List<String> miss=new ArrayList<>();
-        if(!StringUtils.hasText(requirement.destination())){
+        List<String> miss = new ArrayList<>();
+
+        if (!StringUtils.hasText(requirement.destination())) {
             miss.add("destination");
         }
-        if(!StringUtils.hasText(requirement.budget())){
-            miss.add("budget");
-        }
-        if(requirement.tripDays()==null||requirement.tripDays()<=0){
+
+        if (requirement.tripDays() == null || requirement.tripDays() <= 0) {
             miss.add("tripDays");
         }
+
         return miss;
     }
 
     public List<String> findMissingPreferencFields(TripRequirement tripRequirement){
-        TripRequirement requirement = normalize(tripRequirement);
-        boolean hasPace = StringUtils.hasText(requirement.pacePreference());
-        boolean hasInterests = requirement.interests() != null && !requirement.interests().isEmpty();
-
-        if (hasPace || hasInterests) {
-            return List.of();
-        }
-        return List.of("preference");
+        return List.of();
     }
 
     public boolean isReady(TripRequirement tripRequirement){
@@ -42,7 +35,7 @@ public class RequirementCompletenessChecker {
 
     private TripRequirement normalize(TripRequirement tripRequirement) {
         return tripRequirement == null
-                ? new TripRequirement(null, null, null, null, List.of())
+                ? new TripRequirement(null, null, null, null, List.of(), null)
                 : tripRequirement;
     }
 }

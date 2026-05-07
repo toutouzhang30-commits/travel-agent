@@ -6,5 +6,9 @@ public record ToolEvidence(String toolName,
                            String summary,
                            String sourceName,
                            String updatedAt,
-                           String errorMessage) {
+                           String errorMessage,
+                           Integer dayNumber,
+                           String targetSlot,
+                           String origin,
+                           String destination) {
 }
