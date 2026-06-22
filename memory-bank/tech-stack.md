@@ -43,17 +43,18 @@
 | 模型接入 | DeepSeek OpenAI 兼容 API | 当前主模型路径 | 已落地 |
 | 内部知识库 | Spring AI PgVector | 内部 RAG 知识检索 | 已完成最小闭环 |
 | RAG 入库幂等 | PostgreSQL manifest 表 + JdbcTemplate | 控制启动入库、重建和 active run | 已落地基础能力 |
+| PDF 文本抽取 | Apache PDFBox + `PdfRagDocumentLoader` | 将受控 PDF 攻略抽取、清洗并包装为 `RagRawDocument`，再复用现有 `RagDocumentConverter` 入库 | 目标态，待接入 |
 | 向量真实评分 | PgVector distance / similarity + JdbcTemplate fallback | 替代固定兜底分，支撑可解释 gate | Phase 3B 后续 |
 | 中文词法召回 | Postgres FTS（`zhparser` / `pg_jieba`）优先，Lucene BM25 fallback | 补足语义召回漏召 | Phase 3B 后续 |
 | 多路融合 | RRF + Sigmoid / `score / (score + 10)` 平滑映射 | 融合 vector 与 lexical rank / score | Phase 3B 后续 |
 | 专业重排 | DashScope `gte-rerank-v2` | 对融合候选做专业 rerank | Phase 3B 后续 |
 | 网页治理采集 | RestClient + Jsoup | 受控获取和清洗公开网页知识 | 目标态，未完整落地 |
 | 外部证据能力 | 受控网页采集 / 后续可选 MCP search/browser | 为高级 RAG 补 freshness 与覆盖率 | Phase 3B 目标，MCP 未落地 |
-| 主工具层 | Spring AI `@Tool` | 实时能力主工具调用方式 | WeatherTool 与 MapsTool 已落地，Pricing 暂停 |
+| 主工具层 | Spring AI `@Tool` + 受控 ReAct / Tool-use | 实时能力主工具调用方式，后续用于参数提取、工具调用、观察结果和一次补救/降级 | WeatherTool 与 MapsTool 已落地，受控 ReAct 待补齐，Pricing 暂停 |
 | 后续工具协议 | MCP（可选） | 未来外部工具协议扩展 | 后续选项，当前非必须 |
 | 过渡工具底座 | 本地 service/client + 统一工具网关 | 承接天气、高德地图等外部 API 能力，向 `@Tool` 主线过渡 | WeatherTool / MapsTool 已存在 |
-| Working Memory | 内存态 SessionState 扩展 + 摘要对象 + TTL/容量限制 | 支撑多轮路由、检索、工具、反思 | 现状偏薄，需升级 |
-| Reflection | Java 规则 + LLM 结构化校验 | 有界自检与局部修正 | 目标态，未入主链路 |
+| Working Memory | 内存态 SessionState 扩展 + 摘要对象 + TTL/容量限制 | 支撑多轮路由、检索、工具、反思 | 已有雏形，仍需 stableProfile、recentDecisions 和驱逐治理 |
+| Reflection | Java 规则 + LLM 结构化校验 | 知识问答、itinerary 生成和 itinerary 修改的有界自检与局部修正 | itinerary 生成已部分接入，知识问答 / 修改待补齐 |
 | 业务数据存储 | MySQL 8 | 会话、版本、来源快照等持久化 | 目标态，未进入主线 |
 | ORM | Spring Data JPA | 正式持久化阶段的数据访问 | 依赖已在项目中 |
 | 测试 | JUnit 5 + Spring Boot Test + MockMvc | 单元测试、接口测试 | 适用 |
@@ -110,11 +111,19 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 
 #### C. 入库幂等与重建
 - 使用 `JdbcTemplate` 管理 `rag_ingestion_manifest` 表。
-- 使用 SHA-256 计算 `rag/*.md` 文件名 + 内容的 `content_hash`。
+- 使用 SHA-256 计算所有受控 `RagRawDocument` 的文件名 + 内容的 `content_hash`，包括 `rag/*.md` 和后续 PDF loader 输出。
 - 使用配置化 `pipeline-version`、chunk 策略、metadata 字段、embedding model / dimensions 生成 `pipeline_hash`。
 - 只有 manifest 为 `COMPLETED` 且两个 hash 都一致时，才跳过启动入库。
 - 通过 `IN_PROGRESS / COMPLETED / FAILED` 状态和事务边界避免半完成入库被误认为成功。
 - PgVector 检索过滤当前 `active_run_id`，知识问答检索已完成 city 优先收口。
+
+#### D. PDF 攻略入库
+- PDF 入库属于内部知识源治理，不属于 PDF 导出能力。
+- PDF 文本抽取建议使用 Apache PDFBox。
+- `PdfRagDocumentLoader` 只产出 `RagRawDocument`，其内容必须包装成现有 `--- metadata --- content` 分段格式。
+- PDF 后续仍交给 `RagDocumentConverter` 做 metadata 解析和 chunk，不能绕开现有 converter 直接写 Spring AI `Document`。
+- PDF 正文必须先清理页眉页脚、页码、目录、广告和重复导航。
+- PDF 中的实时天气、票价、路线耗时等信息不得作为长期静态知识确定回答。
 
 #### B. 外部证据能力
 - 受控网页采集，以及后续可选 MCP search / browser 等能力
@@ -134,6 +143,7 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - **Spring AI `@Tool` 是当前工具调用主线**
 - 当前先保留本地工具底座
 - 先通过统一工具网关让编排器面向统一接口
+- 工具调用后续采用受控 ReAct / Tool-use，而不是开放式无限 Agent：参数提取 -> 工具调用 -> 观察结果 -> 最多一次补救或降级 -> 最终回答
 - 后续如确有需要，再逐步接入真实 MCP tool 能力
 
 这比“一步到位重做所有工具集成”更稳。
@@ -152,7 +162,8 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - 先用内存态 `SessionStateStore` 演进为 Working Memory 容器
 - 用摘要对象保存 RAG / Tool / Reflection 结果，不保存完整上下文
 - 用最近 5 轮对话和最近 5 次关键决策作为默认容量边界
-- Reflection 用 Java 规则 + LLM 结构化校验组合
+- Reflection 用 Java 规则 + LLM 结构化校验组合，主要服务知识问答、itinerary 生成和 itinerary 修改
+- 工具调用用受控 ReAct / Tool-use 处理参数补全、失败观察、一次补救和降级回答
 - 正式持久化延后到 MySQL 阶段
 
 这样既能尽快把链路跑通，也不会把当前阶段拖入过重的持久化设计。
@@ -203,7 +214,7 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - 为高价值内容提供后续治理入库候选
 
 ### 5.5 主工具层
-**当前主线技术：** Spring AI `@Tool`
+**当前主线技术：** Spring AI `@Tool` + 受控 ReAct / Tool-use
 
 **后续可选技术：** MCP
 
@@ -211,6 +222,8 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - 提供天气、路线、票价、搜索、浏览等能力
 - 输出规范化工具结果、来源、时间和失败状态
 - 与 SSE 的 `tool_call` / `tool_result` 对齐
+- 对工具问题执行有界流程：结构化参数提取、工具调用、观察工具结果、最多一次补救或降级、最终回答
+- 工具调用不使用无限 Reflection 循环；Reflection 只作为轻量输出校验，确保失败透明、来源和更新时间清楚
 
 ### 5.6 Working Memory
 **当前推荐技术：** 内存态 SessionState 扩展 + 摘要对象 + TTL/容量限制
@@ -227,10 +240,11 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 **推荐技术：** Java 规则校验 + LLM 结构化校验
 
 **职责：**
-- 检查结果是否满足用户约束
-- 检查知识或工具证据是否不足
-- 检查修改是否落实
+- 检查知识回答是否证据足够、语气是否过度确定
+- 检查 itinerary 是否满足用户约束和工具证据
+- 检查 itinerary 修改是否落实
 - 触发一次有界修正
+- 工具调用链路只做轻量结果校验，不作为主要行动循环
 
 ### 5.8 持久化层
 **推荐技术：** MySQL 8 + Spring Data JPA
@@ -270,6 +284,7 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - 在主分流还不稳定时先铺开大量新工具
 - 在没有评估基准、负样本和拒答阈值时盲目扩大网页采集范围
 - PDF 导出
+- 未经治理的 PDF 原文直接入库
 
 ---
 
@@ -297,11 +312,12 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - Lucene fallback 索引同步：绑定 manifest active run，active run 变化或 chunk count 不一致时重建
 - RagRetrievalGate：低质量、错城市、实时问题和负样本拒答阈值
 - RagContextCompressor：控制进入 prompt 的证据长度和来源摘要
-- Working Memory 扩展，先服务路由上下文，并补齐上下文压缩与驱逐机制
-- Reflection loop 主链路化
-- 统一工具网关与工具结果时效治理
+- Working Memory 扩展，补齐 stableProfile、recentDecisions、上下文压缩与驱逐机制
+- Reflection loop 补齐到知识问答和 itinerary 修改链路
+- 工具调用受控 ReAct / Tool-use 与工具结果时效治理
 - 后续可选的 MCP integration
 - 外部证据能力
+- 受控 PDF 攻略入库：PDF 抽取、清洗、metadata 包装为 `RagRawDocument` 并复用 `RagDocumentConverter`
 - 路由稳定后的混合 RAG 排序与压缩
 
 ---
@@ -312,10 +328,10 @@ Spring AI 在这里最重要的价值不是 Prompt 拼接，而是：
 - **Web 与交互**：Spring MVC + Thymeleaf + 原生 JavaScript + SSE
 - **模型与结构化输出**：Spring AI + DeepSeek OpenAI 兼容 API，先用于结构化路由
 - **内部知识库**：Spring AI PgVector
-- **入库一致性**：PostgreSQL manifest 表 + JdbcTemplate + content/pipeline hash
+- **入库一致性**：PostgreSQL manifest 表 + JdbcTemplate + content/pipeline hash；Markdown 与受控 PDF 均先统一为 `RagRawDocument`
 - **高级 RAG**：PgVector 真实 distance/similarity + Postgres FTS / Lucene BM25 + RRF + DashScope `gte-rerank-v2` + JSONL 评估集 + JUnit/报告输出 + RagRetrievalGate + 上下文压缩
-- **外部证据与工具方向**：Spring AI `@Tool` 当前优先，MCP 后续可选；网页采集需受控治理，不做运行时随意爬取
-- **上下文与修正**：内存态 Working Memory + 摘要压缩/驱逐 + Java/LLM 结合的 Reflection loop，优先支撑路由和局部修正
+- **外部证据与工具方向**：Spring AI `@Tool` 当前优先，工具调用后续采用受控 ReAct / Tool-use，MCP 后续可选；网页采集需受控治理，不做运行时随意爬取
+- **上下文与修正**：内存态 Working Memory + 摘要压缩/驱逐 + Java/LLM 结合的 Reflection loop；Reflection 主要服务知识问答和 itinerary 生成/修改，工具调用服务于受控 ReAct
 - **持久化**：后续以 MySQL + JPA 承接正式状态
 
 这条路线的关键优点是：**与当前仓库状态衔接自然，同时能支撑从“聊天骨架”演进到“真正旅游 Agent”。**

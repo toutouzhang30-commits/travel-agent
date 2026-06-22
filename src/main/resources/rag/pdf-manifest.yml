@@ -1,0 +1,25 @@
+enabled: true
+sources:
+  - id: beijing-pdf-001
+    city: 北京
+    category: PDF攻略
+    sourceName: beijing.pdf
+    path: D:/实习/beijing.pdf
+    verifiedAt: 2026-06-04
+    confidenceLevel: medium
+
+  - id: hangzhou-pdf-001
+    city: 杭州
+    category: PDF攻略
+    sourceName: hangzhoulvyougonglue20170414.pdf
+    path: D:/实习/hangzhoulvyougonglue20170414.pdf
+    verifiedAt: 2026-06-04
+    confidenceLevel: medium
+
+  - id: shanghai-pdf-001
+    city: 上海
+    category: PDF攻略
+    sourceName: shanghaigonglue.pdf
+    path: D:/实习/shanghaigonglue.pdf
+    verifiedAt: 2026-06-04
+    confidenceLevel: medium

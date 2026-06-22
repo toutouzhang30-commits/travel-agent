@@ -14,8 +14,13 @@ import java.util.List;
 @Component
 //为数据和处理逻辑生成“唯一身份证”
 public class RagIngestionFingerprintService {
-    private static final String CONVERTER_VERSION = "rag-document-converter-v1";
-    private static final String METADATA_VERSION = "metadata-v1";
+    //private static final String CONVERTER_VERSION = "rag-document-converter-v1";
+    //private static final String CONVERTER_VERSION = "rag-document-converter-v2-chunked";
+    //private static final String METADATA_VERSION = "metadata-v1";
+    private static final String CONVERTER_VERSION = "rag-document-converter-v4-pdf-sectioned-category-topic";
+    private static final String METADATA_VERSION = "metadata-v3-category-topic-section";
+    //private static final String PDF_CLASSIFIER_PROMPT_VERSION = "pdf-section-classifier-v1";
+    private static final String PDF_CLASSIFIER_PROMPT_VERSION = "pdf-section-classifier-v2-no-fallback-ingestion";
 
     private final RagIngestionProperties properties;
     private final String embeddingModel;
@@ -47,20 +52,21 @@ public class RagIngestionFingerprintService {
     //你用了什么方法处理这个数据，处理方法变了，旧数据也不对
     public String pipelineHash() {
         return sha256("""
-                pipelineVersion=%s
-                converterVersion=%s
-                metadataVersion=%s
-                embeddingModel=%s
-                embeddingDimensions=%s
-                """.formatted(
+            pipelineVersion=%s
+            converterVersion=%s
+            metadataVersion=%s
+            pdfClassifierPromptVersion=%s
+            embeddingModel=%s
+            embeddingDimensions=%s
+            """.formatted(
                 properties.getPipelineVersion(),
                 CONVERTER_VERSION,
                 METADATA_VERSION,
+                PDF_CLASSIFIER_PROMPT_VERSION,
                 embeddingModel,
                 embeddingDimensions
         ));
     }
-
     private String sha256(String value) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");

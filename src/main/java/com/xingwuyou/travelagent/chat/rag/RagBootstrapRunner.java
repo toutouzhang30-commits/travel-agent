@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 //启动自动入库
 //每次应用启动时执行
+@org.springframework.core.annotation.Order(org.springframework.core.Ordered.LOWEST_PRECEDENCE)
 @Component
 public class RagBootstrapRunner implements ApplicationRunner {
     private final RagIngestionService ragIngestionService;

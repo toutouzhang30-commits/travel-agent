@@ -31,7 +31,7 @@
         <spring-ai.version>2.0.0-M4</spring-ai.version>
         <lucene.version>10.4.0</lucene.version>
         <victools-jsonschema.version>5.0.0</victools-jsonschema.version>
-
+        <playwright.version>1.60.0</playwright.version>
     </properties>
     <dependencies>
         <dependency>
@@ -135,6 +135,25 @@
             <version>${victools-jsonschema.version}</version>
         </dependency>
 
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>1.18.3</version>
+        </dependency>
+        <dependency>
+            <groupId>com.microsoft.playwright</groupId>
+            <artifactId>playwright</artifactId>
+            <version>${playwright.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.5</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+        </dependency>
 
 
     </dependencies>

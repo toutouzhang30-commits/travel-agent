@@ -25,7 +25,7 @@
 因此，这个系统不再只是一个聊天接口，而应是一个：
 - 带网页聊天界面的 Spring MVC 应用
 - 带 SSE 流式事件输出的 Agent 系统
-- 同时具备知识层、工具层、工作记忆和反思闭环的旅游规划后端
+- 同时具备知识层、工具层、工作记忆、路线校验和反思闭环的旅游规划后端
 
 ---
 
@@ -46,6 +46,7 @@
 - WeatherTool 受控工具调用与 SSE 状态展示
 - 基于高德 Amap 的 MapsTool 已接入主链路，路线、距离、交通耗时问题可进入同步与 SSE 工具调用闭环
 - 天气 API 调用底座
+- Phase 5 已部分接入：内存态 Working Memory 已保存最近对话、工具证据、行程摘要和反思摘要；itinerary 生成链路已接入最小 Reflection 和一次局部修正
 
 ### 3.2 当前最主要的问题
 当前架构距离目标态还有明显差距：
@@ -53,8 +54,9 @@
 - RAG 仍缺少评估基准、负样本、真实向量分数、RRF 融合、`RagEvidenceJudge` 和系统性评估报告
 - RAG 上下文压缩与来源治理仍较粗糙，当前更接近简单截断与基础来源传递
 - MCP 在代码中还没有真实接入点，且不属于当前必须落地项
-- 工作记忆仍太薄
-- Reflection 还没有进入主链路
+- Working Memory 已有内存态雏形，但仍缺少 stableProfile、recentDecisions、目的地切换清理和工具证据时效驱逐
+- Reflection 已进入 itinerary 生成链路，但知识问答和 itinerary 修改链路仍未形成稳定反思闭环
+- 工具调用当前是受控单次工具流，后续应演进为有边界的 ReAct / Tool-use 流程，用于参数补全、失败观察、一次补救和降级回答
 
 ### 3.3 核心迁移原则
 接下来所有改动都应遵守这些原则：
@@ -80,6 +82,7 @@ AgentOrchestratorService
   ├─ Hybrid Retrieval
   ├─ Spring AI @Tool Layer
   ├─ Itinerary Generation / Modification
+  ├─ Route Validation
   ├─ Reflection Loop
   └─ Source / Uncertainty Assembler
   ↓
@@ -198,6 +201,7 @@ SSE 事件流
 - 区域玩法
 - 季节建议
 - 整理过的攻略摘要
+- 经清洗和标注后的 PDF 攻略正文
 - 可长期保留的非实时知识
 
 #### B. 外部证据能力
@@ -227,11 +231,17 @@ SSE 事件流
 Vector Recall + BM25 Recall
   -> candidate union / dedup
   -> DashScope Reranker
+  -> RagRetrievalGate
   -> RagEvidenceJudge
   -> Context Injection
 ```
 
-Reranker 负责排序，不负责判断证据是否足够回答；`RagEvidenceJudge` 是证据充分性判断层，不替代 reranker。`RagEvidenceJudge` 可以按“子代理式裁判”设计，但对外必须封装为受控 Spring Service，并输出结构化 DTO。第一版 judge 批处理策略固定为每批最多 5 条 snippet、约 3000 字符上限、最多 3 批，并停止于首个 `evidenceEnough=true` 的批次。
+Reranker 负责排序，不负责判断证据是否足够回答。RAG 质量治理拆成三层：
+- `RagRetrievalGate` 做规则校验，先拦截非 RAG action、低分、错城市、无来源和实时问题误入 RAG 等确定性问题。
+- `RagEvidenceJudge` 做按需 LLM-as-Judge，只在规则层低置信、复杂问题、候选冲突或评估场景触发；它是证据充分性判断层，不替代 reranker。
+- 少量人工抽检用于校准评估集、阈值和 judge prompt，抽查线上低置信样例与 judge 分歧样例，不作为日常在线回答必经链路。
+
+`RagEvidenceJudge` 可以按“子代理式裁判”设计，但对外必须封装为受控 Spring Service，并输出结构化 DTO，例如相关性、覆盖度、依据充分性、缺失信息、建议动作和是否允许进入上下文。第一版 judge 批处理策略固定为每批最多 5 条 snippet、约 3000 字符上限、最多 3 批，并停止于首个 `evidenceEnough=true` 的批次。
 
 #### C. RAG 入库一致性
 内部知识库已经具备基础稳定的启动入库策略：
@@ -241,6 +251,27 @@ Reranker 负责排序，不负责判断证据是否足够回答；`RagEvidenceJu
 - 重建时先写新 `run_id`，成功后切换 manifest 的 active run，再清理旧 run，避免失败后知识库为空。
 - 检索优先过滤当前 `active_run_id`，避免新旧 chunk 混合命中。
 - 当前知识问答检索不再使用模型生成的 topic 做精确硬过滤；topic 后续更适合作为 Phase 3B 重排信号。
+
+#### D. 受控 PDF 知识源入库
+PDF 可以作为内部知识库的受控补充来源，但只走离线治理入库链路，不作为运行时临时读取材料。
+
+目标链路为：
+```text
+PDF
+  -> PdfRagDocumentLoader
+  -> RagRawDocument
+  -> RagDocumentConverter
+  -> RagKnowledgeDocument
+  -> Spring AI Document
+  -> PgVector
+```
+
+关键边界：
+- `PdfRagDocumentLoader` 属于 `chat.rag.ingest.component`，只负责 PDF 文本抽取、基础清洗和包装成现有 Markdown 分段格式。
+- PDF loader 不能直接产出 Spring AI `Document`，必须复用 `RagDocumentConverter`，避免绕开当前 metadata、chunk 策略、manifest hash 和 active run 机制。
+- PDF 输出的 `RagRawDocument.content()` 必须使用现有 `--- metadata --- content` 格式，并标注 `city`、`category`、`source`、`sourceType: "PDF"`、`verifiedAt`、`confidenceLevel` 等字段。
+- PDF 正文入库前必须清理页眉页脚、页码、目录、广告、重复导航和明显无关内容。
+- PDF 中的实时天气、实时票价、实时路线耗时等内容不得作为长期静态知识确定回答，仍必须由工具层或拒答边界处理。
 
 ### 5.6 工具层（Spring AI `@Tool` 优先，MCP 后续可选）
 **目标定位：**
@@ -260,6 +291,7 @@ Reranker 负责排序，不负责判断证据是否足够回答；`RagEvidenceJu
 - WeatherTool 与 MapsTool 已先后纳入受控工具闭环
 - MapsTool 当前第一版继续使用高德 Amap，覆盖路线、距离、交通耗时
 - PricingTool 暂停，不做真实票价或余票调用，不允许 RAG 编造价格
+- 工具调用链路不以 Reflection 作为主循环，而应采用受控 ReAct / Tool-use：参数提取 -> 工具调用 -> 观察结果 -> 最多一次补救或降级 -> 最终回答
 - 后续如确有需要，再逐步评估 MCP search / browser 或 pricing 能力
 
 **工具层最少能力要求：**
@@ -271,14 +303,17 @@ Reranker 负责排序，不负责判断证据是否足够回答；`RagEvidenceJu
 
 ### 5.7 Reflection Loop
 **目标定位：**
-- Reflection 不再是后补优化，而是主链路的一部分
+- Reflection 不再是后补优化，而是知识问答、itinerary 生成和 itinerary 修改链路的一部分
+- 实时工具调用更适合受控 ReAct / Tool-use；Reflection 在工具链路中只做轻量输出校验，不作为无限循环
+- itinerary 最终确认需要接入路线校验：MapsTool 提供客观路线证据，RouteValidationAgent 判断行程可执行性并给出局部修正建议
 
 **目标作用：**
 - 检查路由是否合理
 - 检查知识回答是否证据不足却语气过强
-- 检查工具失败是否被透明暴露
 - 检查 itinerary 是否满足用户约束
+- 检查 itinerary 的路线顺序、相邻景点交通耗时、每日通勤压力和节奏是否合理
 - 检查修改是否真正落实
+- 对工具调用最终回答做轻量校验：失败是否透明、来源和更新时间是否表达清楚、是否把失败伪装成成功
 
 **推荐控制原则：**
 - 有界循环
@@ -287,8 +322,31 @@ Reranker 负责排序，不负责判断证据是否足够回答；`RagEvidenceJu
 - 只输出用户可见的修正过程和结果
 
 **当前现状：**
-- memory-bank 已经提出需要 Reflection
-- 但当前代码主链路中尚未落地
+- itinerary 生成链路已接入最小 Reflection：生成草稿后结合工具证据检查，并最多触发一次局部修正
+- RouteValidationAgent 尚未实现；当前只有 MapsTool 第一版可以提供路线、距离、交通耗时和交通方式等客观数据
+- 当前 Reflection 仍不完整：知识问答、itinerary 修改链路尚未统一接入，Java 规则兜底仍不足
+- 工具调用链路尚未形成受控 ReAct，只是结构化参数提取后的单次工具调用和失败降级
+
+### 5.8 路线校验层（Route Validation）
+**目标定位：**
+- 把 itinerary 从“看起来合理的文本”推进到“经过路线证据校验的可执行计划”
+- 作为 Phase 5 主链路能力接在 itinerary 生成和修改之后，不后置到 Phase 8
+
+目标链路：
+```text
+Itinerary Generation / Modification
+  -> MapsTool route evidence
+  -> RouteValidationAgent
+  -> optional local revision
+  -> SSE output
+```
+
+分工：
+- `MapsTool` 继续归属 `chat.tool.maps`，只提供客观数据：路线、距离、耗时、交通方式、来源和更新时间。
+- `RouteValidationAgent` 未来归属 `chat.agent.route`，负责判断路线顺序、每日节奏、绕路风险和可执行性，不直接调用外部地图 API。
+- `RouteValidationResult` 目标输出包含 `feasibilityScore`、`paceScore`、`routeEfficiencyScore`、`issues`、`suggestions`、`needsRevision`。
+- 当 `needsRevision=true` 时，最多触发一次 itinerary 局部修正，不做无限循环或整份无故重写。
+- MapsTool 失败时，路线校验必须保留不确定性，不能伪造客观耗时。
 
 ---
 
@@ -303,6 +361,8 @@ chat/
   ├─ routing/
   ├─ reflection/
   ├─ rag/
+  ├─ agent/
+  │   └─ route/                # 后续 RouteValidationAgent
   ├─ tool/
   │   ├─ weather/
   │   ├─ maps/
@@ -373,14 +433,16 @@ Reflection loop 不一定需要单独新事件类型，第一阶段可以通过 
 2. Working Memory
 3. Spring AI `@Tool` 工具层
 4. Reflection loop
+5. Route Validation
 
 ### 9.2 当前最需要推进的现实缺口
 1. 当前混合 RAG 已出现部分代码，但仍需要编译、配置和回归测试验证主链路稳定
-2. 当前 RAG 缺少项目内评估基准、负样本和可量化报告
+2. 当前 RAG 缺少项目内评估基准、负样本、可量化报告和少量人工抽检流程
 3. 当前 `RagRetrievalGate` 已出现，但阈值、负样本和用户可见降级仍需验证
-4. 当前已出现 Vector + BM25 + Reranker 的候选治理雏形，但 `RagEvidenceJudge`、RRF / score fusion 和系统性评估仍未完成
-5. 当前 Working Memory 仍不足以支撑多轮路由上下文
-6. 当前 Reflection 还没进入真实编排主链路
+4. 当前已出现 Vector + BM25 + Reranker 的候选治理雏形，但按需 `RagEvidenceJudge`、RRF / score fusion 和系统性评估仍未完成
+5. 当前 Working Memory 已有内存态雏形，但仍不足以支撑稳定多轮路由、目的地切换清理和工具证据时效治理
+6. 当前 Reflection 只部分进入 itinerary 生成链路，知识问答和 itinerary 修改仍需补齐；工具调用应改造成受控 ReAct / Tool-use
+7. 当前 RouteValidationAgent 尚未实现，路线校验还没有进入 itinerary 最终确认链路
 
 ### 9.3 迁移顺序建议
 1. Phase 4B-1 高德 MapsTool 已完成第一版调用闭环，后续只做稳定性和体验补强
@@ -391,14 +453,17 @@ Reflection loop 不一定需要单独新事件类型，第一阶段可以通过 
 6. Phase 3B-5 先做 candidate union / dedup，RRF 与 score fusion 后置
 7. Phase 3B-6 接入 DashScope `gte-rerank-v2`，失败时 fallback 到合并候选原始排序
 8. Phase 3B-7 引入 RagEvidenceJudge、上下文注入与来源治理
-9. SessionState 升级为 Working Memory，先服务路由上下文、地图参数补全和工具结果时效驱逐
-10. Reflection loop 前移到主链路
+9. Phase 3B-7 同步明确 RAG 三层质量治理：规则校验、按需 LLM-as-Judge、少量人工抽检
+10. SessionState 继续升级为 Working Memory，补齐 stableProfile、recentDecisions、目的地切换清理和工具结果时效驱逐
+11. Reflection loop 补齐到知识问答、itinerary 生成和 itinerary 修改；工具调用链路采用受控 ReAct / Tool-use，而不是开放式无限 Agent
+12. 在 Phase 5 itinerary 生成/修改后接入 RouteValidationAgent，复用 MapsTool 路线证据做可执行性校验和最多一次局部修正
 
 ---
 
 ## 10. 当前明确不做
 为了防止架构目标继续发散，当前明确不做：
-- 不恢复 PDF 目标
+- 不做 PDF 导出
+- 不把未经清洗和标注的 PDF 原文直接塞入 RAG
 - 不引入 WebSocket
 - 不一开始就做复杂前后端分离
 - 不把实时信息伪装成 RAG 结果
@@ -422,10 +487,12 @@ Reflection loop 不一定需要单独新事件类型，第一阶段可以通过 
 仍不能写成已完成的部分：
 - 尚未确认 Maven 编译和测试全部通过。
 - `RagEvidenceJudge` 尚未落地。
+- RAG 三层质量治理尚未完整落地：规则层已有雏形，按需 LLM-as-Judge 和人工抽检流程仍需补齐。
 - RRF / score fusion 尚未落地。
 - 真实 PgVector distance / similarity 仍需确认。
 - 当前上下文压缩仍偏简单，不等于完整来源治理。
+- RouteValidationAgent 尚未实现，路线校验闭环尚未进入 itinerary 最终确认链路。
 - PricingTool 暂不实施真实外部调用，只保留未接入提示和 RAG 拒绝边界。
 
 ## 12. 一句话架构策略
-系统以 Spring MVC + SSE 网页聊天室为入口，已完成结构化路由前置、RAG 最小闭环、WeatherTool 受控工具展示和基于高德 Amap 的 MapsTool 第一版调用闭环；路线、距离、交通耗时问题已进入受控 `@Tool` + SSE 闭环。PricingTool 暂停真实调用，下一步继续收口 RAG 候选治理、评估报告、`RagEvidenceJudge` 和来源治理。
+系统以 Spring MVC + SSE 网页聊天室为入口，已完成结构化路由前置、RAG 最小闭环、WeatherTool 受控工具展示和基于高德 Amap 的 MapsTool 第一版调用闭环；Phase 5 已部分接入内存态 Working Memory 和 itinerary 生成 Reflection。PricingTool 暂停真实调用，下一步继续收口 RAG 三层质量治理，并补齐知识问答 / itinerary 修改 Reflection、工具调用受控 ReAct / Tool-use 与基于 MapsTool 证据的 RouteValidationAgent 路线校验闭环。

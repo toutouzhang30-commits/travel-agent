@@ -2,14 +2,18 @@ package com.xingwuyou.travelagent.chat.service;
 
 import com.xingwuyou.travelagent.chat.agent.evidence.ItineraryEvidenceCollector;
 import com.xingwuyou.travelagent.chat.agent.evidence.dto.ItineraryEvidenceBundle;
+import com.xingwuyou.travelagent.chat.agent.reflection.KnowledgeReflectionResult;
+import com.xingwuyou.travelagent.chat.agent.reflection.KnowledgeReflectionService;
 import com.xingwuyou.travelagent.chat.component.*;
 import com.xingwuyou.travelagent.chat.dto.*;
 import com.xingwuyou.travelagent.chat.model.Itinerary;
 import com.xingwuyou.travelagent.chat.rag.retrieval.dto.RagRetrievalFlowResult;
 import com.xingwuyou.travelagent.chat.rag.retrieval.dto.RagRetrievalResult;
 import com.xingwuyou.travelagent.chat.rag.retrieval.service.RagRetrievalFlowService;
+import com.xingwuyou.travelagent.chat.session.context.WorkingMemoryContextAssembler;
 import com.xingwuyou.travelagent.chat.session.model.SessionState;
 import com.xingwuyou.travelagent.chat.session.SessionStateStore;
+import com.xingwuyou.travelagent.chat.session.persistence.service.PersistentSessionMemoryService;
 import com.xingwuyou.travelagent.chat.tool.weather.WeatherTool;
 import com.xingwuyou.travelagent.chat.tool.weather.common.ToolAnswerGenerator;
 import com.xingwuyou.travelagent.chat.tool.weather.common.WeatherQueryExtractor;
@@ -33,6 +37,7 @@ import com.xingwuyou.travelagent.chat.session.model.ReflectionMemory;
 import com.xingwuyou.travelagent.chat.session.model.ToolEvidence;
 import com.xingwuyou.travelagent.chat.session.model.WorkingMemory;
 import com.xingwuyou.travelagent.chat.session.service.WorkingMemoryService;
+
 
 
 
@@ -66,7 +71,9 @@ public class AgentOrchestratorService implements ChatService {
     private final ItineraryEvidenceCollector itineraryEvidenceCollector;
     private final WorkingMemoryService workingMemoryService;
     private final ItineraryReflectionService itineraryReflectionService;
-
+    private final KnowledgeReflectionService knowledgeReflectionService;
+    private final WorkingMemoryContextAssembler workingMemoryContextAssembler;
+    private final PersistentSessionMemoryService persistentSessionMemoryService;
 
 
 
@@ -92,8 +99,10 @@ public class AgentOrchestratorService implements ChatService {
             MapsAnswerGenerator mapsAnswerGenerator,
             ItineraryEvidenceCollector itineraryEvidenceCollector,
             WorkingMemoryService workingMemoryService,
-            ItineraryReflectionService itineraryReflectionService
-
+            ItineraryReflectionService itineraryReflectionService,
+            KnowledgeReflectionService knowledgeReflectionService,
+            WorkingMemoryContextAssembler workingMemoryContextAssembler,
+            PersistentSessionMemoryService persistentSessionMemoryService
     ) {
         this.extractor = extractor;
         this.checker = checker;
@@ -117,7 +126,9 @@ public class AgentOrchestratorService implements ChatService {
         this.itineraryEvidenceCollector=itineraryEvidenceCollector;
         this.workingMemoryService = workingMemoryService;
         this.itineraryReflectionService = itineraryReflectionService;
-
+        this.knowledgeReflectionService = knowledgeReflectionService;
+        this.workingMemoryContextAssembler = workingMemoryContextAssembler;
+        this.persistentSessionMemoryService = persistentSessionMemoryService;;
     }
 
     //为什么需要新增这个内部record?
@@ -145,17 +156,23 @@ public class AgentOrchestratorService implements ChatService {
         String sessionId = resolveSessionId(chatRequest);
 
         SessionState currentState = sessionStateStore.get(sessionId);
-        //这个确定问题的类型
+        String memoryContext = workingMemoryContextAssembler.build(currentState.memory());
+
         IntentRoutingDecision route = intentRoutingService.route(chatRequest.message(), currentState);
 
-        OrchestrationResult result = orchestrateByRoute(sessionId, chatRequest.message(), currentState, route);
-        saveSessionState(sessionId, currentState, chatRequest.message(), result);
+        OrchestrationResult result = orchestrateByRoute(sessionId, chatRequest.message(), currentState, route, memoryContext);
+        saveSessionState(sessionId, currentState, chatRequest.message(), route, result);
         return result.response();
+
 
     }
 
     //目前走什么路径使用这个方法进行判断
-    private OrchestrationResult orchestrateByRoute(String sessionId, String message, SessionState currentState, IntentRoutingDecision route) {
+    private OrchestrationResult orchestrateByRoute( String sessionId,
+                                                    String message,
+                                                    SessionState currentState,
+                                                    IntentRoutingDecision route,
+                                                    String memoryContext) {
         if (route == null || route.action() == null || route.outputMode() == null) {
             return OrchestrationResult.of(buildRoutingFailedResponse(sessionId));
         }
@@ -173,7 +190,7 @@ public class AgentOrchestratorService implements ChatService {
                 case PRICING_TOOL -> OrchestrationResult.of(buildRealtimeUnsupportedResponse(sessionId));
                 default -> OrchestrationResult.of(buildRoutingFailedResponse(sessionId));
             };
-            case KNOWLEDGE_ANSWER -> OrchestrationResult.of(handleKnowledgeAnswer(sessionId, message, currentState, route));
+            case KNOWLEDGE_ANSWER -> handleKnowledgeAnswer(sessionId, message, currentState, route, memoryContext);
             case ITINERARY -> handleRequirementAndGeneration(sessionId, message, currentState, route);
             case ITINERARY_UPDATE -> OrchestrationResult.of(handleItineraryModification(sessionId, message, currentState, route));
             case FOLLOW_UP -> handleRequirementAndGeneration(sessionId, message, currentState, route);
@@ -227,6 +244,7 @@ public class AgentOrchestratorService implements ChatService {
 
                 ChatResponse response;
                 OrchestrationResult orchestrationResult;
+                String memoryContext = workingMemoryContextAssembler.build(currentState.memory());
 
                 if (route.action() == IntentAction.WEATHER_TOOL || route.action() == IntentAction.MAPS_TOOL) {
                     events.add(AgentEvent.status(
@@ -264,12 +282,7 @@ public class AgentOrchestratorService implements ChatService {
                             null
                     );
                 } else {
-                    orchestrationResult = orchestrateByRoute(
-                            sessionId,
-                            chatRequest.message(),
-                            currentState,
-                            route
-                    );
+                    orchestrationResult = orchestrateByRoute(sessionId, chatRequest.message(), currentState, route, memoryContext);
 
                     response = orchestrationResult.response();
                 }
@@ -296,13 +309,7 @@ public class AgentOrchestratorService implements ChatService {
                     events.add(AgentEvent.answer(sessionId, response));
                 }
 
-                saveSessionState(
-                        sessionId,
-                        currentState,
-                        chatRequest.message(),
-                        orchestrationResult
-                );
-
+                saveSessionState(sessionId, currentState, chatRequest.message(), route, orchestrationResult);
 
                 events.add(AgentEvent.done(sessionId));
                 return Flux.fromIterable(events);
@@ -626,21 +633,24 @@ public class AgentOrchestratorService implements ChatService {
             String sessionId,
             SessionState currentState,
             String userMessage,
+            IntentRoutingDecision route,
             OrchestrationResult result
     ) {
-        ChatResponse response = result.response();
-
         WorkingMemory nextMemory = workingMemoryService.remember(
                 currentState,
                 userMessage,
-                response,
+                route,
+                result.response(),
                 result.toolEvidence(),
                 result.reflectionMemory()
         );
-
-        sessionStateStore.save(
+        sessionStateStore.save(sessionId, currentState.merge(result.response().requirement(), result.response().itinerary(), nextMemory));
+        persistentSessionMemoryService.persist(
                 sessionId,
-                currentState.merge(response.requirement(), response.itinerary(), nextMemory)
+                userMessage,
+                route,
+                result.response(),
+                result.reflectionMemory()
         );
     }
 
@@ -676,18 +686,11 @@ public class AgentOrchestratorService implements ChatService {
     }
 
     //处理知识问答问题
-    private ChatResponse handleKnowledgeAnswer(String sessionId, String message, SessionState currentState, IntentRoutingDecision route) {
-        //String city = extractCityFromMessage(message);
-        String city=route.city();
-
-        if (!StringUtils.hasText(city)
-                && currentState.requirement() != null
-                && StringUtils.hasText(currentState.requirement().destination())) {
-            city = currentState.requirement().destination();
-        }
-
-        // 先只按 city 过滤，不按 route.topic 精确过滤。
-        // route.topic 是模型生成的自然语义标签，不一定等于入库 metadata 的 category。
+    private OrchestrationResult handleKnowledgeAnswer(String sessionId,
+                                                      String message,
+                                                      SessionState currentState,
+                                                      IntentRoutingDecision route,
+                                                      String memoryContext) {
         String fallbackCity = currentState.requirement() == null
                 ? null
                 : currentState.requirement().destination();
@@ -700,13 +703,27 @@ public class AgentOrchestratorService implements ChatService {
         );
 
         if (!retrieval.allowed()) {
-            return buildRagRejectedResponse(sessionId, retrieval.rejectionReason());
+            return OrchestrationResult.of(buildRagRejectedResponse(sessionId, retrieval.rejectionReason()));
         }
 
         String answer = ragAnswerGenerator.answer(message, retrieval.context());
 
+        KnowledgeReflectionResult check = knowledgeReflectionService.review(
+                message,
+                answer,
+                retrieval.context(),
+                memoryContext
+        );
 
-        return new ChatResponse(
+        //只允许修正一次
+        if (check != null && check.requiresRevision()) {
+            answer = ragAnswerGenerator.answer(
+                    message,
+                    retrieval.context() + "\n\n" + check.revisionInstruction()
+            );
+        }
+
+        ChatResponse response = new ChatResponse(
                 sessionId,
                 ChatResponseType.KNOWLEDGE_ANSWER,
                 answer,
@@ -716,6 +733,13 @@ public class AgentOrchestratorService implements ChatService {
                 null,
                 retrieval.sources()
         );
+
+        ReflectionMemory reflectionMemory = check == null
+                ? null
+                : new ReflectionMemory(check.requiresRevision(), check.publicSummary(), OffsetDateTime.now().toString());
+
+        return new OrchestrationResult(response, List.of(), reflectionMemory);
+
     }
 
 

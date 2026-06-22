@@ -1,6 +1,7 @@
 package com.xingwuyou.travelagent.chat.rag.ingest.service;
 
 
+import com.xingwuyou.travelagent.chat.rag.document.RagDocumentMetadata;
 import com.xingwuyou.travelagent.chat.rag.document.RagKnowledgeDocument;
 import com.xingwuyou.travelagent.chat.rag.ingest.RagIngestionManifestRepository;
 import com.xingwuyou.travelagent.chat.rag.ingest.RagIngestionProperties;
@@ -8,6 +9,7 @@ import com.xingwuyou.travelagent.chat.rag.ingest.component.RagDocumentConverter;
 import com.xingwuyou.travelagent.chat.rag.ingest.component.RagDocumentLoader;
 import com.xingwuyou.travelagent.chat.rag.ingest.dto.RagIngestionManifest;
 import com.xingwuyou.travelagent.chat.rag.ingest.dto.RagRawDocument;
+import com.xingwuyou.travelagent.chat.rag.ingest.repository.RagIngestionRunRepository;
 import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -27,6 +29,7 @@ public class RagIngestionService {
     private final RagIngestionProperties properties;
     private final RagIngestionFingerprintService fingerprintService;
     private final RagIngestionManifestRepository manifestRepository;
+    private final RagIngestionRunRepository runRepository;
 
     public RagIngestionService(
             RagDocumentLoader loader,
@@ -34,7 +37,8 @@ public class RagIngestionService {
             VectorStore vectorStore,
             RagIngestionProperties properties,
             RagIngestionFingerprintService fingerprintService,
-            RagIngestionManifestRepository manifestRepository
+            RagIngestionManifestRepository manifestRepository,
+            RagIngestionRunRepository runRepository
     ) {
         this.loader = loader;
         this.converter = converter;
@@ -42,6 +46,7 @@ public class RagIngestionService {
         this.properties = properties;
         this.fingerprintService = fingerprintService;
         this.manifestRepository = manifestRepository;
+        this.runRepository=runRepository;
     }
 
     //加锁，保证同一时间只有一个线程在执行入库
@@ -99,6 +104,7 @@ public class RagIngestionService {
 
             //数据加工和入库
             manifestRepository.markInProgress(namespace, contentHash, pipelineHash, runId);
+            runRepository.markStarted(runId, namespace, contentHash, pipelineHash);
 
             //切分
             //新 run 没有真实写入数据时，不会 mark completed，也不会清理旧数据。
@@ -119,12 +125,14 @@ public class RagIngestionService {
             }
 
             manifestRepository.markCompleted(namespace, rawDocuments.size(), currentRunCount);
+            runRepository.markCompleted(runId, rawDocuments.size(), currentRunCount);
             manifestRepository.deleteInactiveRuns(namespace, runId);
 
         } catch (Exception e) {
             //出现坏的状况，删除这次的半成品数据
             manifestRepository.deleteRun(namespace, runId);
             manifestRepository.markFailed(namespace, e.getMessage());
+            runRepository.markFailed(runId, e.getMessage());
             throw e;
         } finally {
             manifestRepository.releaseLock(namespace);
@@ -137,19 +145,32 @@ public class RagIngestionService {
             String contentHash,
             String pipelineHash
     ) {
+        RagDocumentMetadata metadata = knowledgeDocument.metadata();
         return new Document(
                 knowledgeDocument.content(),
-                Map.of(
-                        "city", nullSafe(knowledgeDocument.metadata().city()),
-                        "topic", nullSafe(knowledgeDocument.metadata().topic()),
-                        "sourceName", nullSafe(knowledgeDocument.metadata().sourceName()),
-                        "sourceUrl", nullSafe(knowledgeDocument.metadata().sourceUrl()),
-                        "verifiedAt", nullSafe(knowledgeDocument.metadata().verifiedAt()),
-                        "confidenceLevel", nullSafe(knowledgeDocument.metadata().confidenceLevel()),
-                        "ingestionNamespace", namespace,
-                        "ingestionRunId", runId,
-                        "contentHash", contentHash,
-                        "pipelineHash", pipelineHash
+                Map.ofEntries(
+                        Map.entry("city", nullSafe(metadata.city())),
+                        Map.entry("category", nullSafe(metadata.category())),
+                        Map.entry("topic", nullSafe(metadata.topic())),
+                        Map.entry("sourceName", nullSafe(metadata.sourceName())),
+                        Map.entry("sourceUrl", nullSafe(metadata.sourceUrl())),
+                        Map.entry("verifiedAt", nullSafe(metadata.verifiedAt())),
+                        Map.entry("confidenceLevel", nullSafe(metadata.confidenceLevel())),
+                        Map.entry("sourceType", nullSafe(metadata.sourceType())),
+                        Map.entry("sourceId", nullSafe(metadata.sourceId())),
+                        Map.entry("sourceVersionId", nullSafe(metadata.sourceVersionId())),
+                        Map.entry("fetchedAt", nullSafe(metadata.fetchedAt())),
+                        Map.entry("documentContentHash", nullSafe(metadata.documentContentHash())),
+                        Map.entry("ingestionNamespace", nullSafe(properties.getNamespace())),
+                        Map.entry("ingestionRunId", runId),
+                        Map.entry("ingestionContentHash", contentHash),
+                        Map.entry("ingestionPipelineHash", pipelineHash),
+                        Map.entry("sourceTopic", nullSafe(metadata.sourceTopic())),
+                        Map.entry("pageType", nullSafe(metadata.pageType())),
+                        Map.entry("sectionTitle", nullSafe(metadata.sectionTitle())),
+                        Map.entry("sectionSummary", nullSafe(metadata.sectionSummary())),
+                        Map.entry("pageStart", nullSafe(metadata.pageStart())),
+                        Map.entry("pageEnd", nullSafe(metadata.pageEnd()))
                 )
         );
     }

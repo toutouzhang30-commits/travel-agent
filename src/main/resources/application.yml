@@ -58,3 +58,11 @@ travel:
       model: gte-rerank-v2
       top-n: 10
       timeout-ms: 3000
+    ingestion:
+      pipeline-version: rag-bootstrap-v2-pdf
+  memory:
+    datasource:
+      url: ${MEMORY_DATASOURCE_URL}
+      username: ${MEMORY_DATASOURCE_USERNAME}
+      password: ${MEMORY_DATASOURCE_PASSWORD}
+      driver-class-name: com.mysql.cj.jdbc.Driver
